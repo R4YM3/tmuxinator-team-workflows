@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATES_DIR="$REPO_DIR/templates"
-LOCAL_DIR="$REPO_DIR/local"
+DEVELOPER_DIR="$REPO_DIR/developer"
 INTERNAL_DIR="$REPO_DIR/.internal"
 
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
@@ -12,7 +12,7 @@ TMUXINATOR_DIR="$CONFIG_HOME/tmuxinator"
 ENV_FILE="$INTERNAL_DIR/env.sh"
 MANIFEST_FILE="$INTERNAL_DIR/install-manifest.txt"
 TMP_MANIFEST_FILE="$INTERNAL_DIR/.install-manifest.tmp"
-INTERNAL_README_FILE="$INTERNAL_DIR/README"
+INFO_FILE="$INTERNAL_DIR/INFO.md"
 
 INSTALLED_COUNT=0
 SKIPPED_COUNT=0
@@ -142,21 +142,57 @@ ensure_internal_dir() {
   mkdir -p "$INTERNAL_DIR"
 }
 
-write_internal_readme() {
+check_existing_install() {
+  if [[ -f "$MANIFEST_FILE" ]]; then
+    echo
+    info "Existing installation detected."
+    echo
+    echo "This installer will:"
+    echo "  - sync templates into $DEVELOPER_DIR"
+    echo "  - update symlinks in $TMUXINATOR_DIR"
+    echo "  - refresh internal metadata in $INTERNAL_DIR"
+    echo
+    echo "Local changes will NOT be overwritten without confirmation."
+    echo
+    read -r -p "Continue installation? [Y/n]: " confirm_install
+    if [[ "${confirm_install:-Y}" =~ ^[Nn]$ ]]; then
+      info "Installation cancelled."
+      exit 0
+    fi
+  else
+    echo
+    info "Fresh installation detected."
+    echo "This installer will set up shared workflows, local developer copies, and tmuxinator symlinks."
+  fi
+}
+
+write_info_file() {
   ensure_internal_dir
 
-  cat >"$INTERNAL_README_FILE" <<'EOF'
-This directory is managed by the installer.
+  cat >"$INFO_FILE" <<'EOF'
+# Internal installer state
 
-It contains internal framework files such as:
-- env.sh
-- install-manifest.txt
+This directory is created by the **tmuxinator-team-workflows installer**.
 
-These files are used by install.sh and uninstall.sh.
-They are not meant for normal editing and can be regenerated.
+It stores metadata used by the installation and uninstall scripts.
+
+Files stored here:
+
+- `env.sh` — environment variables used by tmuxinator templates
+- `install-manifest.txt` — tracks installed files and symlinks
+- `INFO.md` — this explanation
+
+You normally **do not need to modify anything in this folder**.
+
+⚠️ Editing or deleting files here may break the installation or prevent the uninstall script from working correctly.
+
+This folder is managed automatically by:
+
+- `install.sh`
+- `uninstall.sh`
 EOF
 
-  ok "Wrote internal README: $INTERNAL_README_FILE"
+  ok "Wrote info file: $INFO_FILE"
 }
 
 install_env_file() {
@@ -180,16 +216,16 @@ append_source_block_if_missing() {
   mkdir -p "$(dirname "$rc_file")"
   touch "$rc_file"
 
-  if grep -Fqs "# >>> tmuxinator projects >>>" "$rc_file"; then
+  if grep -Fqs "# >>> tmuxinator team workflows >>>" "$rc_file"; then
     ok "Shell block already present in $rc_file"
     return 0
   fi
 
   cat >>"$rc_file" <<EOF
 
-# >>> tmuxinator projects >>>
+# >>> tmuxinator team workflows >>>
 $source_cmd
-# <<< tmuxinator projects <<<
+# <<< tmuxinator team workflows <<<
 EOF
 
   ok "Added shell block to $rc_file"
@@ -224,14 +260,14 @@ finalize_manifest() {
 
 should_copy_file() {
   local template_file="$1"
-  local local_file="$2"
+  local developer_file="$2"
 
-  if [[ ! -e "$local_file" ]]; then
+  if [[ ! -e "$developer_file" ]]; then
     return 0
   fi
 
-  if cmp -s "$template_file" "$local_file"; then
-    info "Unchanged, skipped: $local_file"
+  if cmp -s "$template_file" "$developer_file"; then
+    info "Unchanged, skipped: $developer_file"
     UNCHANGED_COUNT=$((UNCHANGED_COUNT + 1))
     return 1
   fi
@@ -241,18 +277,18 @@ should_copy_file() {
   fi
 
   if [[ "$KEEP_ALL" == true ]]; then
-    warn "Keeping local file: $local_file"
+    warn "Keeping developer file: $developer_file"
     SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
     return 1
   fi
 
   echo
-  warn "Local file differs from shared template:"
-  echo "  $local_file"
+  warn "Developer file differs from shared template:"
+  echo "  $developer_file"
   echo
   echo "Choose an action:"
-  echo "  [y] overwrite this local file from templates"
-  echo "  [n] keep local file"
+  echo "  [y] overwrite this developer file from templates"
+  echo "  [n] keep developer file"
   echo "  [a] overwrite this and all remaining differing files"
   echo "  [k] keep this and all remaining differing files"
   read -r -p "Your choice [y/N/a/k]: " overwrite_choice
@@ -265,12 +301,12 @@ should_copy_file() {
     ;;
   [Kk])
     KEEP_ALL=true
-    warn "Keeping local file: $local_file"
+    warn "Keeping developer file: $developer_file"
     SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
     return 1
     ;;
   *)
-    warn "Keeping local file: $local_file"
+    warn "Keeping developer file: $developer_file"
     SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
     return 1
     ;;
@@ -308,7 +344,7 @@ create_symlink() {
 
 install_tmuxinator_projects() {
   mkdir -p "$TMUXINATOR_DIR"
-  mkdir -p "$LOCAL_DIR"
+  mkdir -p "$DEVELOPER_DIR"
 
   local files=()
   shopt -s nullglob
@@ -320,48 +356,26 @@ install_tmuxinator_projects() {
     exit 1
   fi
 
-  local template_file filename local_file tmuxinator_link
-
+  local template_file filename developer_file tmuxinator_link
   for template_file in "${files[@]}"; do
     filename="$(basename "$template_file")"
-    local_file="$LOCAL_DIR/$filename"
+    developer_file="$DEVELOPER_DIR/$filename"
     tmuxinator_link="$TMUXINATOR_DIR/$filename"
 
-    add_manifest_entry "LOCAL_FILE=$local_file"
+    add_manifest_entry "DEVELOPER_FILE=$developer_file"
     add_manifest_entry "LINK_FILE=$tmuxinator_link"
 
-    if should_copy_file "$template_file" "$local_file"; then
-      cp "$template_file" "$local_file"
-      ok "Copied template to local editable file: $local_file"
+    if should_copy_file "$template_file" "$developer_file"; then
+      cp "$template_file" "$developer_file"
+      ok "Copied template to developer file: $developer_file"
       INSTALLED_COUNT=$((INSTALLED_COUNT + 1))
     fi
 
-    create_symlink "$local_file" "$tmuxinator_link" || true
+    create_symlink "$developer_file" "$tmuxinator_link" || true
   done
 
-  # record internal files so uninstall can clean them
   add_manifest_entry "ENV_FILE=$ENV_FILE"
-  add_manifest_entry "INTERNAL_README_FILE=$INTERNAL_README_FILE"
-}
-
-check_existing_install() {
-  if [[ -f "$MANIFEST_FILE" ]]; then
-    echo
-    info "Existing installation detected."
-    echo
-    echo "This installer will:"
-    echo "  - update symlinks in $TMUXINATOR_DIR"
-    echo "  - sync templates into $LOCAL_DIR"
-    echo
-    echo "Local changes will NOT be overwritten without confirmation."
-    echo
-
-    read -r -p "Continue installation? [Y/n]: " confirm_install
-    if [[ "${confirm_install:-Y}" =~ ^[Nn]$ ]]; then
-      info "Installation cancelled."
-      exit 0
-    fi
-  fi
+  add_manifest_entry "INFO_FILE=$INFO_FILE"
 }
 
 main() {
@@ -393,7 +407,7 @@ main() {
 
   check_existing_install
   prepare_manifest
-  write_internal_readme
+  write_info_file
   install_env_file "$repositories_root"
   export REPOSITORIES_ROOT="$repositories_root"
   ok "Exported REPOSITORIES_ROOT for this install session"
@@ -403,9 +417,9 @@ main() {
 
   if [[ -n "$rc_file" ]]; then
     if [[ "$rc_file" == *"/config.fish" ]]; then
-      source_cmd="test -f \"$ENV_FILE\"; and source \"$ENV_FILE\""
+      source_cmd="test -f "$ENV_FILE"; and source "$ENV_FILE""
     else
-      source_cmd="[ -f \"$ENV_FILE\" ] && source \"$ENV_FILE\""
+      source_cmd="[ -f "$ENV_FILE" ] && source "$ENV_FILE""
     fi
 
     read -r -p "Add REPOSITORIES_ROOT loader to $rc_file? [Y/n]: " confirm_rc
@@ -426,17 +440,17 @@ main() {
   ok "Installation complete"
   printf "REPOSITORIES_ROOT=%s\n" "$REPOSITORIES_ROOT"
   printf "Shared templates dir: %s\n" "$TEMPLATES_DIR"
-  printf "Local editable dir: %s\n" "$LOCAL_DIR"
+  printf "Developer dir: %s\n" "$DEVELOPER_DIR"
   printf "Internal dir: %s\n" "$INTERNAL_DIR"
   printf "Tmuxinator config dir: %s\n" "$TMUXINATOR_DIR"
   printf "Copied project files: %d\n" "$INSTALLED_COUNT"
-  printf "Skipped differing local files: %d\n" "$SKIPPED_COUNT"
-  printf "Skipped unchanged local files: %d\n" "$UNCHANGED_COUNT"
+  printf "Skipped differing developer files: %d\n" "$SKIPPED_COUNT"
+  printf "Skipped unchanged developer files: %d\n" "$UNCHANGED_COUNT"
   printf "Symlinks created/updated: %d\n" "$LINKED_COUNT"
 
   echo
-  info "Developers can edit their local project files here:"
-  printf "  %s\n" "$LOCAL_DIR"
+  info "Developers can edit their workflow files here:"
+  printf "  %s\n" "$DEVELOPER_DIR"
 
   if [[ -n "${rc_file:-}" ]]; then
     info "Open a new shell or run:"
