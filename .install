@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "tmuxinator-team-workflows installer wrapper"
+  echo
+  echo "Usage: ./.install [options]"
+  echo
+  echo "This is a convenience wrapper around: bash install.sh"
+  echo
+  echo "Options:"
+  echo "  --yes              Non-interactive mode; accepts safe defaults"
+  echo "  --repos-root PATH  Set REPOSITORIES_ROOT without prompting"
+  echo "  --no-shell-rc      Do not add env loader block to shell rc file"
+  echo "  --check            Validate templates only; do not write files"
+  echo "  -h, --help         Show this help"
+  echo
+  echo "Examples:"
+  echo "  ./.install"
+  echo "  ./.install --yes --repos-root \"$HOME/code\""
+  echo "  ./.install --check --repos-root \"$HOME/code\""
+  exit 0
+fi
+
+exec bash "$REPO_DIR/install.sh" "$@"

@@ -2,8 +2,8 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEMPLATES_DIR="$REPO_DIR/templates"
 DEVELOPER_DIR="$REPO_DIR/developer"
+DEVELOPER_PROJECTS_DIR="$DEVELOPER_DIR/projects"
 INTERNAL_DIR="$REPO_DIR/.internal"
 
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
@@ -13,8 +13,7 @@ ENV_FILE="$INTERNAL_DIR/env.sh"
 MANIFEST_FILE="$INTERNAL_DIR/install-manifest.txt"
 INFO_FILE="$INTERNAL_DIR/INFO.md"
 
-REMOVE_ALL=false
-KEEP_ALL=false
+ASSUME_YES=false
 
 REMOVED_COUNT=0
 SKIPPED_COUNT=0
@@ -22,6 +21,36 @@ SKIPPED_COUNT=0
 info() { printf "\033[1;34m[info]\033[0m %s\n" "$1"; }
 ok() { printf "\033[1;32m[ok]\033[0m %s\n" "$1"; }
 warn() { printf "\033[1;33m[warn]\033[0m %s\n" "$1"; }
+
+usage() {
+  cat <<'EOF'
+Usage: bash uninstall.sh [options]
+
+Options:
+  --yes       Non-interactive mode
+  -h, --help  Show this help
+EOF
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+    --yes)
+      ASSUME_YES=true
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      warn "Unknown option: $1"
+      usage
+      exit 1
+      ;;
+    esac
+  done
+}
 
 detect_shell_rc() {
   case "${SHELL:-}" in
@@ -42,78 +71,6 @@ remove_source_block() {
   rm -f "$rc_file.bak"
 
   ok "Removed shell block from $rc_file if present"
-}
-
-should_remove_developer_file() {
-  local developer_file="$1"
-  local template_file="$2"
-
-  if [[ ! -e "$developer_file" ]]; then
-    return 1
-  fi
-
-  if [[ "$REMOVE_ALL" == true ]]; then
-    return 0
-  fi
-
-  if [[ "$KEEP_ALL" == true ]]; then
-    warn "Keeping developer file: $developer_file"
-    SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-    return 1
-  fi
-
-  if [[ -f "$template_file" ]] && cmp -s "$template_file" "$developer_file"; then
-    return 0
-  fi
-
-  echo
-  if [[ -f "$template_file" ]]; then
-    warn "Developer file differs from shared template:"
-    echo "  $developer_file"
-  else
-    warn "No matching template exists for developer file:"
-    echo "  $developer_file"
-  fi
-  echo
-  echo "Choose an action:"
-  echo "  [y] remove this developer file"
-  echo "  [n] keep developer file"
-  echo "  [a] remove this and all remaining developer files"
-  echo "  [k] keep this and all remaining developer files"
-  read -r -p "Your choice [y/N/a/k]: " remove_choice
-
-  case "${remove_choice:-N}" in
-  [Yy]) return 0 ;;
-  [Aa])
-    REMOVE_ALL=true
-    return 0
-    ;;
-  [Kk])
-    KEEP_ALL=true
-    warn "Keeping developer file: $developer_file"
-    SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-    return 1
-    ;;
-  *)
-    warn "Keeping developer file: $developer_file"
-    SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-    return 1
-    ;;
-  esac
-}
-
-remove_developer_file() {
-  local developer_file="$1"
-  local filename template_file
-
-  filename="$(basename "$developer_file")"
-  template_file="$TEMPLATES_DIR/$filename"
-
-  if should_remove_developer_file "$developer_file" "$template_file"; then
-    rm -f "$developer_file"
-    ok "Removed developer file: $developer_file"
-    REMOVED_COUNT=$((REMOVED_COUNT + 1))
-  fi
 }
 
 remove_link_file() {
@@ -149,10 +106,6 @@ remove_installed_files() {
       [[ -n "$line" ]] || continue
 
       case "$line" in
-      DEVELOPER_FILE=*)
-        path="${line#DEVELOPER_FILE=}"
-        remove_developer_file "$path"
-        ;;
       LINK_FILE=*)
         path="${line#LINK_FILE=}"
         remove_link_file "$path"
@@ -191,8 +144,47 @@ remove_installed_files() {
   rmdir "$INTERNAL_DIR" 2>/dev/null || true
 }
 
+remove_developer_overrides() {
+  if [[ ! -d "$DEVELOPER_PROJECTS_DIR" ]]; then
+    return 0
+  fi
+
+  local override_files=()
+  shopt -s nullglob
+  override_files=("$DEVELOPER_PROJECTS_DIR"/*.override.yml)
+  shopt -u nullglob
+
+  if [[ ${#override_files[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  echo
+  warn "Developer override files found in $DEVELOPER_PROJECTS_DIR"
+  local confirm_remove_overrides="N"
+  if [[ "$ASSUME_YES" == true ]]; then
+    confirm_remove_overrides="Y"
+  else
+    read -r -p "Remove these override files as well? [y/N]: " confirm_remove_overrides
+  fi
+
+  if [[ ! "${confirm_remove_overrides:-N}" =~ ^[Yy]$ ]]; then
+    warn "Keeping developer override files"
+    SKIPPED_COUNT=$((SKIPPED_COUNT + ${#override_files[@]}))
+    return 0
+  fi
+
+  local override_file
+  for override_file in "${override_files[@]}"; do
+    rm -f "$override_file"
+    ok "Removed override file: $override_file"
+    REMOVED_COUNT=$((REMOVED_COUNT + 1))
+  done
+}
+
 main() {
+  parse_args "$@"
   remove_installed_files
+  remove_developer_overrides
 
   echo
   ok "Uninstall complete"

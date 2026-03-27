@@ -1,0 +1,52 @@
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+
+load_nvm() {
+  if [ -s "$NVM_DIR/nvm.sh" ]; then
+    . "$NVM_DIR/nvm.sh"
+  elif [ -s "$(brew --prefix nvm 2>/dev/null)/nvm.sh" ]; then
+    . "$(brew --prefix nvm 2>/dev/null)/nvm.sh"
+  fi
+}
+
+install_nvm() {
+  if command -v brew >/dev/null 2>&1; then
+    echo "nvm not found. Installing with Homebrew..."
+    brew install nvm || return 1
+  elif command -v curl >/dev/null 2>&1; then
+    echo "nvm not found. Installing with official install script..."
+    curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash || return 1
+  elif command -v wget >/dev/null 2>&1; then
+    echo "nvm not found. Installing with official install script..."
+    wget -qO- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash || return 1
+  else
+    echo "nvm not found and no installer available (brew/curl/wget)."
+    return 1
+  fi
+
+  load_nvm
+}
+
+load_nvm
+
+if ! command -v nvm >/dev/null 2>&1; then
+  install_nvm || echo "Could not install nvm automatically. Please install it manually."
+fi
+
+if command -v nvm >/dev/null 2>&1; then
+  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    echo "node/npm not found. Installing Node LTS with nvm..."
+    nvm install --lts || echo "Could not install Node with nvm."
+  fi
+
+  nvm use --lts >/dev/null 2>&1 || nvm use >/dev/null 2>&1 || true
+elif ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+  if command -v brew >/dev/null 2>&1; then
+    echo "node/npm not found. Installing with Homebrew..."
+    brew install node || echo "Could not install node with Homebrew."
+  elif command -v apt >/dev/null 2>&1; then
+    echo "node/npm not found. Installing with apt..."
+    sudo apt update && sudo apt install -y nodejs npm || echo "Could not install node/npm with apt."
+  else
+    echo "node/npm not found and no supported package manager detected."
+  fi
+fi

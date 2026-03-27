@@ -1,0 +1,13 @@
+<%
+editor_cmd = overrides["editor_cmd"] if overrides.is_a?(Hash)
+editor_cmd = nil unless editor_cmd.is_a?(String) && !editor_cmd.strip.empty?
+%>
+
+  - strapi:
+      root: <%= folder %>
+      layout: main-vertical
+      panes:
+<% if editor_cmd %>
+        - editor: '<%= editor_cmd %>'
+<% end %>
+        - server: 'yarn develop || zsh -l'

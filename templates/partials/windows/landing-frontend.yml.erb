@@ -1,0 +1,37 @@
+<%
+editor_cmd = overrides["editor_cmd"] if overrides.is_a?(Hash)
+editor_cmd = nil unless editor_cmd.is_a?(String) && !editor_cmd.strip.empty?
+%>
+
+  - frontend:
+      root: <%= folder %>
+      layout: main-vertical
+      panes:
+<% if editor_cmd %>
+        - editor: '<%= editor_cmd %>'
+<% end %>
+        - server: 'npm run dev || zsh -l'
+        - tests: 'npm run test:watch || zsh -l'
+        - codegen: 'npm run codegen:watch || zsh -l'
+
+  - qa:
+      root: <%= folder %>
+      layout: even-horizontal
+      panes:
+        - lint: 'npm run lint || zsh -l'
+        - types: 'npm run check-types || zsh -l'
+        - test: 'npm run test || zsh -l'
+
+  - trace:
+      root: <%= folder %>
+      layout: even-horizontal
+      panes:
+        - control: 'echo "Start tracing with: npm run jaeger:start" && echo "Then run: npm run dev:trace" && zsh -l'
+        - jaeger: 'echo "Jaeger UI -> http://localhost:16686" && zsh -l'
+
+  - perf:
+      root: <%= folder %>
+      layout: even-horizontal
+      panes:
+        - build: 'echo "Run when needed: npm run build" && zsh -l'
+        - lighthouse: 'echo "Run when needed: npm run lighthouse" && zsh -l'
