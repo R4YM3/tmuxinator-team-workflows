@@ -2,8 +2,9 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEMPLATES_DIR="$REPO_DIR/templates"
+TEMPLATES_DIR="$REPO_DIR/templates/projects"
 DEVELOPER_DIR="$REPO_DIR/developer"
+DEVELOPER_PROJECTS_DIR="$DEVELOPER_DIR/projects"
 INTERNAL_DIR="$REPO_DIR/.internal"
 
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
@@ -14,18 +15,85 @@ MANIFEST_FILE="$INTERNAL_DIR/install-manifest.txt"
 TMP_MANIFEST_FILE="$INTERNAL_DIR/.install-manifest.tmp"
 INFO_FILE="$INTERNAL_DIR/INFO.md"
 
-INSTALLED_COUNT=0
-SKIPPED_COUNT=0
-UNCHANGED_COUNT=0
 LINKED_COUNT=0
 
-OVERWRITE_ALL=false
-KEEP_ALL=false
+ASSUME_YES=false
+SKIP_SHELL_RC=false
+CHECK_ONLY=false
+REPOSITORIES_ROOT_INPUT=""
 
 info() { printf "\033[1;34m[info]\033[0m %s\n" "$1"; }
 ok() { printf "\033[1;32m[ok]\033[0m %s\n" "$1"; }
 warn() { printf "\033[1;33m[warn]\033[0m %s\n" "$1"; }
 error() { printf "\033[1;31m[error]\033[0m %s\n" "$1" >&2; }
+
+usage() {
+  cat <<'EOF'
+Usage: bash install.sh [options]
+
+Install tmuxinator team workflows into ~/.config/tmuxinator using symlinks
+from templates/projects and configure environment loading.
+
+Options:
+  --yes              Non-interactive mode; accepts safe defaults
+  --repos-root PATH  Set REPOSITORIES_ROOT without prompting
+  --no-shell-rc      Do not add env loader block to shell rc file
+  --check            Validate templates only; do not write files/symlinks
+  -h, --help         Show this help
+
+Examples:
+  bash install.sh
+  bash install.sh --yes --repos-root "$HOME/code"
+  bash install.sh --check --repos-root "$HOME/code"
+
+What install writes:
+  - .internal/env.sh
+  - .internal/install-manifest.txt
+  - .internal/INFO.md
+  - symlinks in ~/.config/tmuxinator/*.yml
+
+Required at runtime (rendering templates):
+  REPOSITORIES_ROOT
+  TEAM_WORKFLOWS_REPO_DIR
+  TEAM_WORKFLOWS_HELPER_FILE
+EOF
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+    --yes)
+      ASSUME_YES=true
+      shift
+      ;;
+    --repos-root)
+      [[ $# -ge 2 ]] || {
+        error "--repos-root requires a path"
+        exit 1
+      }
+      REPOSITORIES_ROOT_INPUT="$2"
+      shift 2
+      ;;
+    --no-shell-rc)
+      SKIP_SHELL_RC=true
+      shift
+      ;;
+    --check)
+      CHECK_ONLY=true
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      error "Unknown option: $1"
+      usage
+      exit 1
+      ;;
+    esac
+  done
+}
 
 detect_shell_rc() {
   case "${SHELL:-}" in
@@ -45,7 +113,11 @@ check_tmux() {
   warn "tmux is required but not installed."
 
   if command -v brew >/dev/null 2>&1; then
-    read -r -p "Install tmux with Homebrew? [Y/n]: " confirm_tmux
+    if [[ "$ASSUME_YES" == true ]]; then
+      confirm_tmux="Y"
+    else
+      read -r -p "Install tmux with Homebrew? [Y/n]: " confirm_tmux
+    fi
     if [[ ! "${confirm_tmux:-Y}" =~ ^[Nn]$ ]]; then
       brew install tmux
       if command -v tmux >/dev/null 2>&1; then
@@ -56,7 +128,11 @@ check_tmux() {
     info "Install tmux manually with:"
     echo "  brew install tmux"
   elif command -v apt >/dev/null 2>&1; then
-    read -r -p "Install tmux with apt? [Y/n]: " confirm_tmux
+    if [[ "$ASSUME_YES" == true ]]; then
+      confirm_tmux="Y"
+    else
+      read -r -p "Install tmux with apt? [Y/n]: " confirm_tmux
+    fi
     if [[ ! "${confirm_tmux:-Y}" =~ ^[Nn]$ ]]; then
       sudo apt update
       sudo apt install -y tmux
@@ -104,7 +180,11 @@ check_tmuxinator() {
 
   if command -v brew >/dev/null 2>&1; then
     info "Preferred install method on macOS: Homebrew"
-    read -r -p "Install tmuxinator with Homebrew? [Y/n]: " confirm_brew
+    if [[ "$ASSUME_YES" == true ]]; then
+      confirm_brew="Y"
+    else
+      read -r -p "Install tmuxinator with Homebrew? [Y/n]: " confirm_brew
+    fi
     if [[ ! "${confirm_brew:-Y}" =~ ^[Nn]$ ]]; then
       brew install tmuxinator
       if command -v tmuxinator >/dev/null 2>&1; then
@@ -117,7 +197,11 @@ check_tmuxinator() {
   fi
 
   if command -v gem >/dev/null 2>&1; then
-    read -r -p "Install tmuxinator with RubyGems? [Y/n]: " confirm_gem
+    if [[ "$ASSUME_YES" == true ]]; then
+      confirm_gem="Y"
+    else
+      read -r -p "Install tmuxinator with RubyGems? [Y/n]: " confirm_gem
+    fi
     if [[ ! "${confirm_gem:-Y}" =~ ^[Nn]$ ]]; then
       gem install tmuxinator
       if command -v tmuxinator >/dev/null 2>&1; then
@@ -143,18 +227,25 @@ ensure_internal_dir() {
 }
 
 check_existing_install() {
+  if [[ "$CHECK_ONLY" == true ]]; then
+    return 0
+  fi
+
   if [[ -f "$MANIFEST_FILE" ]]; then
     echo
     info "Existing installation detected."
     echo
     echo "This installer will:"
-    echo "  - sync templates into $DEVELOPER_DIR"
+    echo "  - keep templates as the source of truth in $TEMPLATES_DIR"
+    echo "  - keep developer overrides in $DEVELOPER_PROJECTS_DIR"
     echo "  - update symlinks in $TMUXINATOR_DIR"
     echo "  - refresh internal metadata in $INTERNAL_DIR"
     echo
-    echo "Local changes will NOT be overwritten without confirmation."
-    echo
-    read -r -p "Continue installation? [Y/n]: " confirm_install
+    if [[ "$ASSUME_YES" == true ]]; then
+      confirm_install="Y"
+    else
+      read -r -p "Continue installation? [Y/n]: " confirm_install
+    fi
     if [[ "${confirm_install:-Y}" =~ ^[Nn]$ ]]; then
       info "Installation cancelled."
       exit 0
@@ -162,7 +253,7 @@ check_existing_install() {
   else
     echo
     info "Fresh installation detected."
-    echo "This installer will set up shared workflows, local developer copies, and tmuxinator symlinks."
+    echo "This installer will set up shared workflows, developer override folders, and tmuxinator symlinks."
   fi
 }
 
@@ -203,6 +294,8 @@ install_env_file() {
   cat >"$ENV_FILE" <<EOF
 #!/usr/bin/env bash
 export REPOSITORIES_ROOT="$repositories_root"
+export TEAM_WORKFLOWS_REPO_DIR="$REPO_DIR"
+export TEAM_WORKFLOWS_HELPER_FILE="$REPO_DIR/templates/helpers/workflow.rb"
 EOF
 
   chmod +x "$ENV_FILE"
@@ -244,73 +337,30 @@ add_manifest_entry() {
 prepare_manifest() {
   ensure_internal_dir
   : >"$TMP_MANIFEST_FILE"
+}
 
-  if [[ -f "$MANIFEST_FILE" ]]; then
-    while IFS= read -r line; do
-      [[ -n "$line" ]] || continue
-      add_manifest_entry "$line"
-    done <"$MANIFEST_FILE"
-  fi
+cleanup_previous_links() {
+  [[ -f "$MANIFEST_FILE" ]] || return 0
+
+  local line
+  local path
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    case "$line" in
+    LINK_FILE=*)
+      path="${line#LINK_FILE=}"
+      if [[ -L "$path" ]]; then
+        rm -f "$path"
+        info "Removed previous managed symlink: $path"
+      fi
+      ;;
+    esac
+  done <"$MANIFEST_FILE"
 }
 
 finalize_manifest() {
   mv "$TMP_MANIFEST_FILE" "$MANIFEST_FILE"
   ok "Wrote manifest: $MANIFEST_FILE"
-}
-
-should_copy_file() {
-  local template_file="$1"
-  local developer_file="$2"
-
-  if [[ ! -e "$developer_file" ]]; then
-    return 0
-  fi
-
-  if cmp -s "$template_file" "$developer_file"; then
-    info "Unchanged, skipped: $developer_file"
-    UNCHANGED_COUNT=$((UNCHANGED_COUNT + 1))
-    return 1
-  fi
-
-  if [[ "$OVERWRITE_ALL" == true ]]; then
-    return 0
-  fi
-
-  if [[ "$KEEP_ALL" == true ]]; then
-    warn "Keeping developer file: $developer_file"
-    SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-    return 1
-  fi
-
-  echo
-  warn "Developer file differs from shared template:"
-  echo "  $developer_file"
-  echo
-  echo "Choose an action:"
-  echo "  [y] overwrite this developer file from templates"
-  echo "  [n] keep developer file"
-  echo "  [a] overwrite this and all remaining differing files"
-  echo "  [k] keep this and all remaining differing files"
-  read -r -p "Your choice [y/N/a/k]: " overwrite_choice
-
-  case "${overwrite_choice:-N}" in
-  [Yy]) return 0 ;;
-  [Aa])
-    OVERWRITE_ALL=true
-    return 0
-    ;;
-  [Kk])
-    KEEP_ALL=true
-    warn "Keeping developer file: $developer_file"
-    SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-    return 1
-    ;;
-  *)
-    warn "Keeping developer file: $developer_file"
-    SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-    return 1
-    ;;
-  esac
 }
 
 create_symlink() {
@@ -343,8 +393,10 @@ create_symlink() {
 }
 
 install_tmuxinator_projects() {
+  [[ "$CHECK_ONLY" == true ]] && return 0
+
   mkdir -p "$TMUXINATOR_DIR"
-  mkdir -p "$DEVELOPER_DIR"
+  mkdir -p "$DEVELOPER_PROJECTS_DIR"
 
   local files=()
   shopt -s nullglob
@@ -356,31 +408,54 @@ install_tmuxinator_projects() {
     exit 1
   fi
 
-  local template_file filename developer_file tmuxinator_link
+  local template_file filename tmuxinator_link
   for template_file in "${files[@]}"; do
     filename="$(basename "$template_file")"
-    developer_file="$DEVELOPER_DIR/$filename"
     tmuxinator_link="$TMUXINATOR_DIR/$filename"
 
-    add_manifest_entry "DEVELOPER_FILE=$developer_file"
     add_manifest_entry "LINK_FILE=$tmuxinator_link"
-
-    if should_copy_file "$template_file" "$developer_file"; then
-      cp "$template_file" "$developer_file"
-      ok "Copied template to developer file: $developer_file"
-      INSTALLED_COUNT=$((INSTALLED_COUNT + 1))
-    fi
-
-    create_symlink "$developer_file" "$tmuxinator_link" || true
+    create_symlink "$template_file" "$tmuxinator_link" || true
   done
 
   add_manifest_entry "ENV_FILE=$ENV_FILE"
   add_manifest_entry "INFO_FILE=$INFO_FILE"
 }
 
+validate_templates() {
+  local helper_file="$REPO_DIR/templates/helpers/workflow.rb"
+  local project_file
+
+  [[ -f "$helper_file" ]] || {
+    error "Helper file not found: $helper_file"
+    exit 1
+  }
+
+  shopt -s nullglob
+  local files=("$TEMPLATES_DIR"/*.yml)
+  shopt -u nullglob
+
+  if [[ ${#files[@]} -eq 0 ]]; then
+    error "No tmuxinator project files found in: $TEMPLATES_DIR"
+    exit 1
+  fi
+
+  for project_file in "${files[@]}"; do
+    if ! REPOSITORIES_ROOT="$REPOSITORIES_ROOT" TEAM_WORKFLOWS_REPO_DIR="$REPO_DIR" TEAM_WORKFLOWS_HELPER_FILE="$helper_file" ruby -rerubi -e 'file=ARGV[0]; content=File.read(file); out=eval(Erubi::Engine.new(content).src); require "yaml"; YAML.safe_load(out, aliases: true)' "$project_file"; then
+      error "Template validation failed: $project_file"
+      exit 1
+    fi
+  done
+
+  ok "Validated ${#files[@]} template(s)"
+}
+
 main() {
-  check_tmux
-  check_tmuxinator
+  parse_args "$@"
+
+  if [[ "$CHECK_ONLY" != true ]]; then
+    check_tmux
+    check_tmuxinator
+  fi
 
   if [[ ! -d "$TEMPLATES_DIR" ]]; then
     error "Templates directory not found: $TEMPLATES_DIR"
@@ -390,9 +465,15 @@ main() {
   local default_root
   default_root="$(cd "$REPO_DIR/.." && pwd)"
 
-  local repositories_root
-  read -r -p "Enter your repositories root path [$default_root]: " repositories_root
-  repositories_root="${repositories_root:-$default_root}"
+  local repositories_root="$REPOSITORIES_ROOT_INPUT"
+  if [[ -z "$repositories_root" ]]; then
+    if [[ "$ASSUME_YES" == true ]]; then
+      repositories_root="$default_root"
+    else
+      read -r -p "Enter your repositories root path [$default_root]: " repositories_root
+      repositories_root="${repositories_root:-$default_root}"
+    fi
+  fi
 
   case "$repositories_root" in
   "~") repositories_root="$HOME" ;;
@@ -401,28 +482,49 @@ main() {
 
   if [[ ! -d "$repositories_root" ]]; then
     warn "Path does not exist: $repositories_root"
-    read -r -p "Continue anyway? [y/N]: " confirm_continue
+    if [[ "$ASSUME_YES" == true ]]; then
+      confirm_continue="N"
+    else
+      read -r -p "Continue anyway? [y/N]: " confirm_continue
+    fi
     [[ "${confirm_continue:-N}" =~ ^[Yy]$ ]] || exit 1
   fi
 
+  export REPOSITORIES_ROOT="$repositories_root"
+
+  if [[ "$CHECK_ONLY" == true ]]; then
+    validate_templates
+    ok "Check complete"
+    exit 0
+  fi
+
   check_existing_install
+  cleanup_previous_links
   prepare_manifest
   write_info_file
   install_env_file "$repositories_root"
-  export REPOSITORIES_ROOT="$repositories_root"
-  ok "Exported REPOSITORIES_ROOT for this install session"
+  # Load all workflow env vars into the current installer process.
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  ok "Loaded workflow env vars for this install session"
 
   local rc_file source_cmd
   rc_file="$(detect_shell_rc)"
 
-  if [[ -n "$rc_file" ]]; then
+  if [[ "$SKIP_SHELL_RC" == true ]]; then
+    warn "Skipped shell config update (--no-shell-rc)"
+  elif [[ -n "$rc_file" ]]; then
     if [[ "$rc_file" == *"/config.fish" ]]; then
-      source_cmd="test -f "$ENV_FILE"; and source "$ENV_FILE""
+      source_cmd="test -f \"$ENV_FILE\"; and source \"$ENV_FILE\""
     else
-      source_cmd="[ -f "$ENV_FILE" ] && source "$ENV_FILE""
+      source_cmd="[ -f \"$ENV_FILE\" ] && source \"$ENV_FILE\""
     fi
 
-    read -r -p "Add REPOSITORIES_ROOT loader to $rc_file? [Y/n]: " confirm_rc
+    if [[ "$ASSUME_YES" == true ]]; then
+      confirm_rc="Y"
+    else
+      read -r -p "Add REPOSITORIES_ROOT loader to $rc_file? [Y/n]: " confirm_rc
+    fi
     if [[ ! "${confirm_rc:-Y}" =~ ^[Nn]$ ]]; then
       append_source_block_if_missing "$rc_file" "$source_cmd"
       add_manifest_entry "RC_FILE=$rc_file"
@@ -441,16 +543,14 @@ main() {
   printf "REPOSITORIES_ROOT=%s\n" "$REPOSITORIES_ROOT"
   printf "Shared templates dir: %s\n" "$TEMPLATES_DIR"
   printf "Developer dir: %s\n" "$DEVELOPER_DIR"
+  printf "Developer projects dir: %s\n" "$DEVELOPER_PROJECTS_DIR"
   printf "Internal dir: %s\n" "$INTERNAL_DIR"
   printf "Tmuxinator config dir: %s\n" "$TMUXINATOR_DIR"
-  printf "Copied project files: %d\n" "$INSTALLED_COUNT"
-  printf "Skipped differing developer files: %d\n" "$SKIPPED_COUNT"
-  printf "Skipped unchanged developer files: %d\n" "$UNCHANGED_COUNT"
   printf "Symlinks created/updated: %d\n" "$LINKED_COUNT"
 
   echo
-  info "Developers can edit their workflow files here:"
-  printf "  %s\n" "$DEVELOPER_DIR"
+  info "Developers can add personal overrides here:"
+  printf "  %s\n" "$DEVELOPER_PROJECTS_DIR"
 
   if [[ -n "${rc_file:-}" ]]; then
     info "Open a new shell or run:"

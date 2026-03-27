@@ -1,0 +1,24 @@
+name: example-includes
+root: <%= ENV.fetch("REPOSITORIES_ROOT") %>/example-includes
+
+startup_window: app
+
+<%
+Kernel.load ENV.fetch("TEAM_WORKFLOWS_HELPER_FILE")
+override_data = load_project_override("example-includes")
+%>
+
+pre_window: >-
+  bash -lc '<%= include_pre_window("node-nvm-use") %>'
+
+on_project_start: >-
+  bash -lc '<%= include_on_project_start("node-bootstrap") %>; echo "Example workflow loaded."'
+
+windows:
+<%= include_window("example-app", folder: ".", overrides: partial_override(override_data, "example-app")) %>
+
+  - shell:
+      panes:
+        - 'zsh -l'
+
+<%= render_extra_windows(override_data) %>

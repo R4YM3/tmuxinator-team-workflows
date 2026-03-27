@@ -1,0 +1,561 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_PATH" ]]; do
+  SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" == /* ]] || SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+
+REPO_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
+DEFAULT_TWF_HOME="${HOME}/.local/share/twf"
+DEFAULT_TWF_BIN_DIR="${HOME}/.local/bin"
+TMUXINATOR_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tmuxinator"
+
+ok() { printf "\033[1;32m[ok]\033[0m %s\n" "$1"; }
+info() { printf "\033[1;34m[info]\033[0m %s\n" "$1"; }
+warn() { printf "\033[1;33m[warn]\033[0m %s\n" "$1"; }
+error() { printf "\033[1;31m[error]\033[0m %s\n" "$1" >&2; }
+
+usage() {
+  cat <<'EOF'
+Usage: twf <command> [options]
+
+Commands:
+  install [args...]            Make twf available globally, then run install.sh
+  add <project-name> [--dry-run]
+                               Scaffold a full workflow project in current dir
+  remove <project-name> [--yes]
+                               Remove tmuxinator alias; optionally remove project files
+  validate                     Validate workflow templates in active project
+  check                        Alias for validate
+  doctor                       Run environment and template diagnostics
+  update                       Pull latest twf repo changes and reinstall links
+  list                         List available workflows
+  start <project> [args...]    Run tmuxinator start <project>
+  uninstall [--yes]            Remove global twf CLI installation
+  version                      Print twf version
+  help                         Show this help
+
+Examples:
+  twf install --yes --repos-root "$HOME/code"
+  twf add landing-site
+  twf add landing-site --dry-run
+  twf remove landing-site
+  twf validate
+  twf doctor
+  twf update
+  twf start landing-site
+EOF
+}
+
+version() {
+  if command -v git >/dev/null 2>&1 && git -C "$REPO_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$REPO_DIR" describe --tags --always --dirty 2>/dev/null || true
+    return 0
+  fi
+
+  echo "0.1.0"
+}
+
+active_repo_dir() {
+  if [[ -f "$PWD/install.sh" && -d "$PWD/scripts" && -d "$PWD/templates/projects" ]]; then
+    echo "$PWD"
+  else
+    echo "$REPO_DIR"
+  fi
+}
+
+ensure_bin_on_path() {
+  local bin_dir="$1"
+  case ":$PATH:" in
+  *":$bin_dir:"*)
+    ok "$bin_dir is on PATH"
+    ;;
+  *)
+    warn "$bin_dir is not on PATH"
+    info "Add this line to your shell rc file:"
+    printf '  export PATH="%s:$PATH"\n' "$bin_dir"
+    ;;
+  esac
+}
+
+cmd_install() {
+  local bin_dir="${TWF_BIN_DIR:-$DEFAULT_TWF_BIN_DIR}"
+  local cli_target="$REPO_DIR/twf"
+
+  mkdir -p "$bin_dir"
+
+  if [[ "$REPO_DIR" != "${TWF_INSTALL_ROOT:-$DEFAULT_TWF_HOME}" ]]; then
+    warn "twf is running from: $REPO_DIR"
+    warn "Default install root is: ${TWF_INSTALL_ROOT:-$DEFAULT_TWF_HOME}"
+    info "This is fine for local development. Use bootstrap for standard global installs."
+  fi
+
+  ln -sfn "$cli_target" "$bin_dir/twf"
+  ok "Installed CLI symlink: $bin_dir/twf -> $cli_target"
+  ensure_bin_on_path "$bin_dir"
+
+  bash "$REPO_DIR/install.sh" "$@"
+}
+
+validate_project_name() {
+  local project_name="$1"
+  if [[ ! "$project_name" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+    error "Invalid project name: '$project_name'"
+    info "Use lowercase letters, numbers, and dashes only (must start with letter or number)."
+    exit 1
+  fi
+}
+
+cmd_add() {
+  local dry_run=false
+  local project_name=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+    --dry-run)
+      dry_run=true
+      shift
+      ;;
+    -h | --help)
+      cat <<'EOF'
+Usage: twf add <project-name> [--dry-run]
+
+Scaffolds a full workflow project in the current directory.
+
+Rules:
+  - project name is required
+  - root is set to '.'
+  - hard-fails if ~/.config/tmuxinator/<project-name>.yml exists
+  - hard-fails if destination files already exist
+EOF
+      return 0
+      ;;
+    *)
+      if [[ -z "$project_name" ]]; then
+        project_name="$1"
+        shift
+      else
+        error "Unexpected argument: $1"
+        exit 1
+      fi
+      ;;
+    esac
+  done
+
+  if [[ -z "$project_name" ]]; then
+    error "Missing required project name"
+    info "Usage: twf add <project-name> [--dry-run]"
+    exit 1
+  fi
+
+  validate_project_name "$project_name"
+
+  local tmuxinator_file="$TMUXINATOR_DIR/$project_name.yml"
+  if [[ -e "$tmuxinator_file" ]]; then
+    error "Project name already exists in tmuxinator config: $tmuxinator_file"
+    info "Choose a different project name. Overwrite is not allowed."
+    exit 1
+  fi
+
+  local target_dir="$PWD"
+  local project_file="$target_dir/templates/projects/$project_name.yml"
+  local override_file="$target_dir/developer/projects/$project_name.override.yml"
+
+  local collisions=()
+  local required_roots=(
+    "$target_dir/install.sh"
+    "$target_dir/uninstall.sh"
+    "$target_dir/twf"
+    "$target_dir/.install"
+    "$target_dir/.gitignore"
+    "$target_dir/LICENSE"
+    "$target_dir/README.md"
+    "$target_dir/scripts"
+    "$target_dir/templates"
+    "$target_dir/developer"
+  )
+
+  local path
+  for path in "${required_roots[@]}"; do
+    if [[ -e "$path" ]]; then
+      collisions+=("$path")
+    fi
+  done
+
+  if [[ ${#collisions[@]} -gt 0 ]]; then
+    error "Current directory already contains files that add would create"
+    printf '  %s\n' "${collisions[@]}" >&2
+    info "Use an empty directory for 'twf add'."
+    exit 1
+  fi
+
+  local template_src="$REPO_DIR/templates/projects/example-includes.yml"
+  local override_src="$REPO_DIR/developer/projects/example-includes.override.yml"
+
+  [[ -f "$template_src" ]] || {
+    error "Missing source template: $template_src"
+    exit 1
+  }
+  [[ -f "$override_src" ]] || {
+    error "Missing source override: $override_src"
+    exit 1
+  }
+
+  info "Adding workflow project '$project_name' in: $target_dir"
+
+  if [[ "$dry_run" == true ]]; then
+    info "Dry run: no files were written"
+    echo "Would create:"
+    echo "  install.sh"
+    echo "  uninstall.sh"
+    echo "  twf"
+    echo "  .install"
+    echo "  .gitignore"
+    echo "  LICENSE"
+    echo "  README.md"
+    echo "  scripts/"
+    echo "  templates/"
+    echo "  developer/.gitkeep"
+    echo "  developer/projects/.gitkeep"
+    echo "  templates/projects/$project_name.yml"
+    echo "  developer/projects/$project_name.override.yml"
+    return 0
+  fi
+
+  cp "$REPO_DIR/install.sh" "$target_dir/install.sh"
+  cp "$REPO_DIR/uninstall.sh" "$target_dir/uninstall.sh"
+  cp "$REPO_DIR/twf" "$target_dir/twf"
+  cp "$REPO_DIR/.install" "$target_dir/.install"
+  cp "$REPO_DIR/.gitignore" "$target_dir/.gitignore"
+  cp "$REPO_DIR/LICENSE" "$target_dir/LICENSE"
+  cp "$REPO_DIR/README.md" "$target_dir/README.md"
+  cp -R "$REPO_DIR/scripts" "$target_dir/scripts"
+  cp -R "$REPO_DIR/templates" "$target_dir/templates"
+
+  mkdir -p "$target_dir/developer/projects"
+  cp "$REPO_DIR/developer/.gitkeep" "$target_dir/developer/.gitkeep"
+  cp "$REPO_DIR/developer/projects/.gitkeep" "$target_dir/developer/projects/.gitkeep"
+
+  rm -f "$target_dir/templates/projects/"*.yml
+  rm -f "$target_dir/developer/projects/"*.override.yml
+
+  sed \
+    -e "s/^name: .*/name: $project_name/" \
+    -e "s|^root: .*|root: .|" \
+    -e "s|load_project_override(\"example-includes\")|load_project_override(\"$project_name\")|" \
+    "$template_src" >"$project_file"
+
+  cp "$override_src" "$override_file"
+
+  chmod +x "$target_dir/install.sh" "$target_dir/uninstall.sh" "$target_dir/.install" "$target_dir/twf"
+  chmod +x "$target_dir/scripts"/*.sh
+
+  ok "Created project scaffold"
+  ok "Created workflow template: $project_file"
+  ok "Created developer override: $override_file"
+  info "Next steps:"
+  echo "  twf install"
+  echo "  twf validate"
+  echo "  twf doctor"
+  echo "  twf start $project_name"
+}
+
+confirm_remove() {
+  local prompt="$1"
+  local response=""
+  read -r -p "$prompt [y/N]: " response
+  [[ "${response:-N}" =~ ^[Yy]$ ]]
+}
+
+cmd_remove() {
+  local assume_yes=false
+  local project_name=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+    --yes)
+      assume_yes=true
+      shift
+      ;;
+    -h | --help)
+      cat <<'EOF'
+Usage: twf remove <project-name> [--yes]
+
+Removes the tmuxinator alias for a project, then optionally removes
+local override/template files when running inside a twf project.
+EOF
+      return 0
+      ;;
+    *)
+      if [[ -z "$project_name" ]]; then
+        project_name="$1"
+        shift
+      else
+        error "Unexpected argument: $1"
+        exit 1
+      fi
+      ;;
+    esac
+  done
+
+  if [[ -z "$project_name" ]]; then
+    error "Missing project name"
+    info "Usage: twf remove <project-name> [--yes]"
+    exit 1
+  fi
+
+  validate_project_name "$project_name"
+
+  local tmuxinator_file="$TMUXINATOR_DIR/$project_name.yml"
+  if [[ ! -e "$tmuxinator_file" ]]; then
+    error "Project alias not found: $tmuxinator_file"
+    info "Nothing removed."
+    exit 1
+  fi
+
+  if [[ -L "$tmuxinator_file" || -f "$tmuxinator_file" ]]; then
+    rm -f "$tmuxinator_file"
+    ok "Removed tmuxinator alias: $tmuxinator_file"
+  else
+    error "Refusing to remove non-file path: $tmuxinator_file"
+    exit 1
+  fi
+
+  local repo
+  repo="$(active_repo_dir)"
+
+  local override_file="$repo/developer/projects/$project_name.override.yml"
+  local template_file="$repo/templates/projects/$project_name.yml"
+
+  if [[ -f "$override_file" ]]; then
+    if [[ "$assume_yes" == true ]] || confirm_remove "Remove override file '$override_file'?"; then
+      rm -f "$override_file"
+      ok "Removed override file: $override_file"
+    else
+      info "Kept override file: $override_file"
+    fi
+  else
+    info "No override file found at: $override_file"
+  fi
+
+  if [[ -f "$template_file" ]]; then
+    if [[ "$assume_yes" == true ]] || confirm_remove "Remove template file '$template_file'?"; then
+      rm -f "$template_file"
+      ok "Removed template file: $template_file"
+    else
+      info "Kept template file: $template_file"
+    fi
+  else
+    info "No template file found at: $template_file"
+  fi
+}
+
+cmd_validate() {
+  local repo
+  repo="$(active_repo_dir)"
+  bash "$repo/scripts/validate-workflows.sh"
+}
+
+cmd_doctor() {
+  local repo
+  repo="$(active_repo_dir)"
+  bash "$repo/scripts/doctor.sh"
+}
+
+cmd_update() {
+  if ! command -v git >/dev/null 2>&1; then
+    error "git is required for twf update"
+    exit 1
+  fi
+
+  if ! git -C "$REPO_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    error "twf update requires a git checkout at: $REPO_DIR"
+    exit 1
+  fi
+
+  info "Updating twf repo at $REPO_DIR"
+  git -C "$REPO_DIR" pull --ff-only
+  info "Re-running installation"
+  bash "$REPO_DIR/install.sh" --yes
+  ok "Update complete"
+}
+
+cmd_list() {
+  local repo
+  repo="$(active_repo_dir)"
+
+  echo "Template workflows ($repo/templates/projects):"
+  if [[ -d "$repo/templates/projects" ]]; then
+    local files=()
+    local file
+    shopt -s nullglob
+    files=("$repo/templates/projects"/*.yml)
+    shopt -u nullglob
+
+    if [[ ${#files[@]} -eq 0 ]]; then
+      echo "  (none)"
+    else
+      for file in "${files[@]}"; do
+        echo "  - $(basename "${file%.yml}")"
+      done
+    fi
+  else
+    echo "  (missing templates/projects)"
+  fi
+
+  echo
+  echo "Installed tmuxinator workflows ($TMUXINATOR_DIR):"
+  if [[ -d "$TMUXINATOR_DIR" ]]; then
+    local installed=()
+    shopt -s nullglob
+    installed=("$TMUXINATOR_DIR"/*.yml)
+    shopt -u nullglob
+
+    if [[ ${#installed[@]} -eq 0 ]]; then
+      echo "  (none)"
+    else
+      local item
+      for item in "${installed[@]}"; do
+        echo "  - $(basename "${item%.yml}")"
+      done
+    fi
+  else
+    echo "  (tmuxinator dir not found)"
+  fi
+}
+
+cmd_start() {
+  if [[ $# -lt 1 ]]; then
+    error "Missing project name"
+    info "Usage: twf start <project-name> [tmuxinator args...]"
+    exit 1
+  fi
+
+  local project_name="$1"
+  shift
+  tmuxinator start "$project_name" "$@"
+}
+
+cmd_uninstall() {
+  local assume_yes=false
+  local arg
+
+  for arg in "$@"; do
+    case "$arg" in
+    --yes)
+      assume_yes=true
+      ;;
+    -h | --help)
+      cat <<'EOF'
+Usage: twf uninstall [--yes]
+
+Removes global twf CLI installation (symlink and install root).
+This does not remove tmuxinator project aliases.
+EOF
+      return 0
+      ;;
+    *)
+      error "Unknown option for uninstall: $arg"
+      info "Usage: twf uninstall [--yes]"
+      exit 1
+      ;;
+    esac
+  done
+
+  local bin_dir="${TWF_BIN_DIR:-$DEFAULT_TWF_BIN_DIR}"
+  local install_root="${TWF_INSTALL_ROOT:-$DEFAULT_TWF_HOME}"
+  local symlink_path="$bin_dir/twf"
+
+  if [[ -L "$symlink_path" || -f "$symlink_path" ]]; then
+    rm -f "$symlink_path"
+    ok "Removed CLI link: $symlink_path"
+  else
+    info "CLI link not found: $symlink_path"
+  fi
+
+  if [[ ! -d "$install_root" ]]; then
+    info "Install root not found: $install_root"
+    return 0
+  fi
+
+  local can_remove_root=false
+  if [[ -f "$install_root/twf" && -f "$install_root/install.sh" ]]; then
+    can_remove_root=true
+  fi
+
+  if [[ "$can_remove_root" != true ]]; then
+    warn "Install root does not look like a twf install: $install_root"
+    warn "Skipping removal for safety"
+    return 0
+  fi
+
+  local remove_root=false
+  if [[ "$assume_yes" == true ]]; then
+    remove_root=true
+  else
+    if confirm_remove "Remove install root '$install_root'?"; then
+      remove_root=true
+    fi
+  fi
+
+  if [[ "$remove_root" == true ]]; then
+    rm -rf "$install_root"
+    ok "Removed install root: $install_root"
+  else
+    info "Kept install root: $install_root"
+  fi
+}
+
+main() {
+  local command="${1:-help}"
+  shift || true
+
+  case "$command" in
+  help | -h | --help)
+    usage
+    ;;
+  version | -v | --version)
+    version
+    ;;
+  install)
+    cmd_install "$@"
+    ;;
+  add)
+    cmd_add "$@"
+    ;;
+  remove)
+    cmd_remove "$@"
+    ;;
+  validate)
+    cmd_validate "$@"
+    ;;
+  check)
+    cmd_validate "$@"
+    ;;
+  doctor)
+    cmd_doctor "$@"
+    ;;
+  update)
+    cmd_update "$@"
+    ;;
+  list)
+    cmd_list "$@"
+    ;;
+  start)
+    cmd_start "$@"
+    ;;
+  uninstall)
+    cmd_uninstall "$@"
+    ;;
+  *)
+    error "Unknown command: $command"
+    usage
+    exit 1
+    ;;
+  esac
+}
+
+main "$@"
