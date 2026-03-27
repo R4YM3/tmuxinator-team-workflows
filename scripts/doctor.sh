@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RUNTIME_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WORKFLOW_REPO_DIR="${TWF_WORKFLOW_REPO:-$RUNTIME_DIR}"
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 TMUXINATOR_DIR="$CONFIG_HOME/tmuxinator"
-INTERNAL_ENV="$REPO_DIR/.internal/env.sh"
+INTERNAL_ENV="$WORKFLOW_REPO_DIR/.internal/env.sh"
 
 ok() { printf "\033[1;32m[ok]\033[0m %s\n" "$1"; }
 warn() { printf "\033[1;33m[warn]\033[0m %s\n" "$1"; }
@@ -47,4 +48,4 @@ else
   warn "Tmuxinator config dir missing: $TMUXINATOR_DIR"
 fi
 
-bash "$REPO_DIR/scripts/validate-workflows.sh"
+TWF_WORKFLOW_REPO="$WORKFLOW_REPO_DIR" bash "$RUNTIME_DIR/scripts/validate-workflows.sh"

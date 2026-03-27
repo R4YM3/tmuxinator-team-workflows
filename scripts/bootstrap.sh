@@ -52,6 +52,10 @@ case ":$PATH:" in
   ;;
 esac
 
-info "Running twf install"
-"$TWF_INSTALL_ROOT/twf" install --yes "$@"
 ok "Bootstrap complete"
+echo
+info "Next steps:"
+echo "  mkdir -p \"$HOME/code/team-workflows\" && cd \"$HOME/code/team-workflows\""
+echo "  twf add my-workflow"
+echo "  twf validate"
+echo "  twf start my-workflow"

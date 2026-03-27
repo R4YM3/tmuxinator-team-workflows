@@ -8,7 +8,7 @@ while [[ -L "$SCRIPT_PATH" ]]; do
   [[ "$SCRIPT_PATH" == /* ]] || SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
 done
 
-REPO_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
+RUNTIME_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
 DEFAULT_TWF_HOME="${HOME}/.local/share/twf"
 DEFAULT_TWF_BIN_DIR="${HOME}/.local/bin"
 TMUXINATOR_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tmuxinator"
@@ -23,23 +23,21 @@ usage() {
 Usage: twf <command> [options]
 
 Commands:
-  install [args...]            Make twf available globally, then run install.sh
   add <project-name> [--dry-run]
-                               Scaffold a full workflow project in current dir
+                               Create workflow repo (if empty) or add a project
   remove <project-name> [--yes]
-                               Remove tmuxinator alias; optionally remove project files
-  validate                     Validate workflow templates in active project
+                               Remove tmuxinator alias; optionally remove local files
+  validate                     Validate templates in current workflow repo
   check                        Alias for validate
   doctor                       Run environment and template diagnostics
-  update                       Pull latest twf repo changes and reinstall links
-  list                         List available workflows
+  update                       Pull latest twf runtime repo
+  list                         List local templates and installed tmuxinator aliases
   start <project> [args...]    Run tmuxinator start <project>
   uninstall [--yes]            Remove global twf CLI installation
   version                      Print twf version
   help                         Show this help
 
 Examples:
-  twf install --yes --repos-root "$HOME/code"
   twf add landing-site
   twf add landing-site --dry-run
   twf remove landing-site
@@ -51,20 +49,46 @@ EOF
 }
 
 version() {
-  if command -v git >/dev/null 2>&1 && git -C "$REPO_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    git -C "$REPO_DIR" describe --tags --always --dirty 2>/dev/null || true
+  if command -v git >/dev/null 2>&1 && git -C "$RUNTIME_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$RUNTIME_DIR" describe --tags --always --dirty 2>/dev/null || true
     return 0
   fi
 
   echo "0.1.0"
 }
 
-active_repo_dir() {
-  if [[ -f "$PWD/install.sh" && -d "$PWD/scripts" && -d "$PWD/templates/projects" ]]; then
+validate_project_name() {
+  local project_name="$1"
+  if [[ ! "$project_name" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+    error "Invalid project name: '$project_name'"
+    info "Use lowercase letters, numbers, and dashes only (must start with letter or number)."
+    exit 1
+  fi
+}
+
+is_workflow_repo() {
+  local dir="$1"
+  [[ -d "$dir/templates/projects" && -d "$dir/developer/projects" ]]
+}
+
+detect_workflow_repo() {
+  if is_workflow_repo "$PWD"; then
     echo "$PWD"
   else
-    echo "$REPO_DIR"
+    echo ""
   fi
+}
+
+require_workflow_repo() {
+  local repo
+  repo="$(detect_workflow_repo)"
+  if [[ -z "$repo" ]]; then
+    error "No workflow repository detected in current directory"
+    info "Run this inside a workflow repo (contains templates/projects and developer/projects)."
+    info "To create one: twf add <project-name>"
+    exit 1
+  fi
+  echo "$repo"
 }
 
 ensure_bin_on_path() {
@@ -81,32 +105,190 @@ ensure_bin_on_path() {
   esac
 }
 
-cmd_install() {
-  local bin_dir="${TWF_BIN_DIR:-$DEFAULT_TWF_BIN_DIR}"
-  local cli_target="$REPO_DIR/twf"
-
-  mkdir -p "$bin_dir"
-
-  if [[ "$REPO_DIR" != "${TWF_INSTALL_ROOT:-$DEFAULT_TWF_HOME}" ]]; then
-    warn "twf is running from: $REPO_DIR"
-    warn "Default install root is: ${TWF_INSTALL_ROOT:-$DEFAULT_TWF_HOME}"
-    info "This is fine for local development. Use bootstrap for standard global installs."
-  fi
-
-  ln -sfn "$cli_target" "$bin_dir/twf"
-  ok "Installed CLI symlink: $bin_dir/twf -> $cli_target"
-  ensure_bin_on_path "$bin_dir"
-
-  bash "$REPO_DIR/install.sh" "$@"
+confirm_remove() {
+  local prompt="$1"
+  local response=""
+  read -r -p "$prompt [y/N]: " response
+  [[ "${response:-N}" =~ ^[Yy]$ ]]
 }
 
-validate_project_name() {
+is_directory_empty() {
+  local dir="$1"
+  local entries=()
+  shopt -s nullglob dotglob
+  entries=("$dir"/*)
+  shopt -u nullglob dotglob
+  [[ ${#entries[@]} -eq 0 ]]
+}
+
+render_project_template() {
   local project_name="$1"
-  if [[ ! "$project_name" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
-    error "Invalid project name: '$project_name'"
-    info "Use lowercase letters, numbers, and dashes only (must start with letter or number)."
+  local template_src="$RUNTIME_DIR/templates/projects/example-includes.yml"
+
+  [[ -f "$template_src" ]] || {
+    error "Missing source template: $template_src"
     exit 1
-  fi
+  }
+
+  sed \
+    -e "s/^name: .*/name: $project_name/" \
+    -e "s|^root: .*|root: .|" \
+    -e "s|load_project_override(\"example-includes\")|load_project_override(\"$project_name\")|" \
+    "$template_src"
+}
+
+scaffold_workflow_repo() {
+  local repo="$1"
+
+  mkdir -p "$repo/templates/projects"
+  mkdir -p "$repo/templates/partials/pre_window"
+  mkdir -p "$repo/templates/partials/on_project_start"
+  mkdir -p "$repo/templates/partials/windows"
+  mkdir -p "$repo/developer/projects"
+
+  cp "$RUNTIME_DIR/.gitignore" "$repo/.gitignore"
+  cp "$RUNTIME_DIR/developer/.gitkeep" "$repo/developer/.gitkeep"
+  cp "$RUNTIME_DIR/developer/projects/.gitkeep" "$repo/developer/projects/.gitkeep"
+
+  cp "$RUNTIME_DIR/templates/partials/pre_window/node-nvm-use.sh.erb" "$repo/templates/partials/pre_window/node-nvm-use.sh.erb"
+  cp "$RUNTIME_DIR/templates/partials/on_project_start/node-bootstrap.sh.erb" "$repo/templates/partials/on_project_start/node-bootstrap.sh.erb"
+  cp "$RUNTIME_DIR/templates/partials/windows/example-app.yml.erb" "$repo/templates/partials/windows/example-app.yml.erb"
+}
+
+write_repo_readme() {
+  local repo="$1"
+  local first_project="$2"
+
+  cat >"$repo/README.md" <<EOF
+# Team workflow repository
+
+This repository is managed with \`twf\` and is intended to live outside application repositories.
+
+- Shared workflow templates: \`templates/projects/\`
+- Reusable partials: \`templates/partials/\`
+- Personal overrides: \`developer/projects/\`
+
+Typical flow:
+
+\`\`\`bash
+twf add $first_project
+twf validate
+twf doctor
+twf start $first_project
+\`\`\`
+
+You can add more projects later from this same repo:
+
+\`\`\`bash
+twf add another-project
+\`\`\`
+EOF
+}
+
+resolve_alias_conflict() {
+  local repo="$1"
+  local project_name="$2"
+  local dry_run="$3"
+
+  local name="$project_name"
+
+  while :; do
+    local project_file="$repo/templates/projects/$name.yml"
+    local override_file="$repo/developer/projects/$name.override.yml"
+    local tmuxinator_file="$TMUXINATOR_DIR/$name.yml"
+
+    if [[ -e "$project_file" || -e "$override_file" ]]; then
+      error "Project files already exist for '$name' in this workflow repo"
+      info "Choose a different project name."
+      exit 1
+    fi
+
+    if [[ ! -e "$tmuxinator_file" ]]; then
+      printf '%s|%s\n' "$name" "create"
+      return 0
+    fi
+
+    if [[ -L "$tmuxinator_file" ]]; then
+      local target=""
+      target="$(readlink "$tmuxinator_file")"
+      if [[ "$target" == "$project_file" ]]; then
+        printf '%s|%s\n' "$name" "same"
+        return 0
+      fi
+    elif [[ ! -f "$tmuxinator_file" ]]; then
+      error "Refusing to manage non-file alias path: $tmuxinator_file"
+      exit 1
+    fi
+
+    echo
+    warn "tmuxinator alias already exists: $tmuxinator_file"
+    if [[ -L "$tmuxinator_file" ]]; then
+      info "Current alias target: $(readlink "$tmuxinator_file")"
+    fi
+    echo "Choose one:"
+    echo "  [r] rename project"
+    echo "  [p] replace alias"
+    local choice=""
+    read -r -p "Your choice [r/p]: " choice
+
+    case "${choice:-}" in
+    r | R)
+      local renamed=""
+      read -r -p "Enter new project name: " renamed
+      if [[ -z "$renamed" ]]; then
+        error "Project name cannot be empty"
+        continue
+      fi
+      validate_project_name "$renamed"
+      name="$renamed"
+      ;;
+    p | P)
+      if [[ "$dry_run" == true ]]; then
+        printf '%s|%s\n' "$name" "replace"
+        return 0
+      fi
+      if confirm_remove "Replace existing alias '$tmuxinator_file'?"; then
+        printf '%s|%s\n' "$name" "replace"
+        return 0
+      fi
+      error "Alias replacement cancelled"
+      exit 1
+      ;;
+    *)
+      error "Invalid choice"
+      ;;
+    esac
+  done
+}
+
+link_project_alias() {
+  local repo="$1"
+  local project_name="$2"
+  local mode="$3"
+
+  local source_file="$repo/templates/projects/$project_name.yml"
+  local tmuxinator_file="$TMUXINATOR_DIR/$project_name.yml"
+
+  mkdir -p "$TMUXINATOR_DIR"
+
+  case "$mode" in
+  create)
+    ln -s "$source_file" "$tmuxinator_file"
+    ok "Created tmuxinator alias: $tmuxinator_file -> $source_file"
+    ;;
+  replace)
+    rm -f "$tmuxinator_file"
+    ln -s "$source_file" "$tmuxinator_file"
+    ok "Replaced tmuxinator alias: $tmuxinator_file -> $source_file"
+    ;;
+  same)
+    ok "tmuxinator alias already points to project file: $tmuxinator_file"
+    ;;
+  *)
+    error "Unknown alias mode: $mode"
+    exit 1
+    ;;
+  esac
 }
 
 cmd_add() {
@@ -123,13 +305,8 @@ cmd_add() {
       cat <<'EOF'
 Usage: twf add <project-name> [--dry-run]
 
-Scaffolds a full workflow project in the current directory.
-
-Rules:
-  - project name is required
-  - root is set to '.'
-  - hard-fails if ~/.config/tmuxinator/<project-name>.yml exists
-  - hard-fails if destination files already exist
+- In an empty directory: creates a workflow repository and adds the project.
+- In an existing workflow repo: adds another project.
 EOF
       return 0
       ;;
@@ -153,121 +330,83 @@ EOF
 
   validate_project_name "$project_name"
 
-  local tmuxinator_file="$TMUXINATOR_DIR/$project_name.yml"
-  if [[ -e "$tmuxinator_file" ]]; then
-    error "Project name already exists in tmuxinator config: $tmuxinator_file"
-    info "Choose a different project name. Overwrite is not allowed."
-    exit 1
-  fi
+  local workflow_repo=""
+  local scaffold_repo=false
 
-  local target_dir="$PWD"
-  local project_file="$target_dir/templates/projects/$project_name.yml"
-  local override_file="$target_dir/developer/projects/$project_name.override.yml"
-
-  local collisions=()
-  local required_roots=(
-    "$target_dir/install.sh"
-    "$target_dir/uninstall.sh"
-    "$target_dir/twf"
-    "$target_dir/.install"
-    "$target_dir/.gitignore"
-    "$target_dir/LICENSE"
-    "$target_dir/README.md"
-    "$target_dir/scripts"
-    "$target_dir/templates"
-    "$target_dir/developer"
-  )
-
-  local path
-  for path in "${required_roots[@]}"; do
-    if [[ -e "$path" ]]; then
-      collisions+=("$path")
+  workflow_repo="$(detect_workflow_repo)"
+  if [[ -z "$workflow_repo" ]]; then
+    if is_directory_empty "$PWD"; then
+      workflow_repo="$PWD"
+      scaffold_repo=true
+      info "Empty directory detected; creating a new workflow repository"
+    else
+      error "Current directory is not an empty directory or workflow repo"
+      info "Use an empty directory to create a workflow repo, or run inside an existing workflow repo."
+      exit 1
     fi
-  done
-
-  if [[ ${#collisions[@]} -gt 0 ]]; then
-    error "Current directory already contains files that add would create"
-    printf '  %s\n' "${collisions[@]}" >&2
-    info "Use an empty directory for 'twf add'."
-    exit 1
   fi
 
-  local template_src="$REPO_DIR/templates/projects/example-includes.yml"
-  local override_src="$REPO_DIR/developer/projects/example-includes.override.yml"
+  local resolution
+  resolution="$(resolve_alias_conflict "$workflow_repo" "$project_name" "$dry_run")"
+  local final_name="${resolution%%|*}"
+  local alias_mode="${resolution#*|}"
 
-  [[ -f "$template_src" ]] || {
-    error "Missing source template: $template_src"
-    exit 1
-  }
+  local project_file="$workflow_repo/templates/projects/$final_name.yml"
+  local override_file="$workflow_repo/developer/projects/$final_name.override.yml"
+  local override_src="$RUNTIME_DIR/developer/projects/example-includes.override.yml"
+
   [[ -f "$override_src" ]] || {
-    error "Missing source override: $override_src"
+    error "Missing source override template: $override_src"
     exit 1
   }
-
-  info "Adding workflow project '$project_name' in: $target_dir"
 
   if [[ "$dry_run" == true ]]; then
     info "Dry run: no files were written"
-    echo "Would create:"
-    echo "  install.sh"
-    echo "  uninstall.sh"
-    echo "  twf"
-    echo "  .install"
-    echo "  .gitignore"
-    echo "  LICENSE"
-    echo "  README.md"
-    echo "  scripts/"
-    echo "  templates/"
-    echo "  developer/.gitkeep"
-    echo "  developer/projects/.gitkeep"
-    echo "  templates/projects/$project_name.yml"
-    echo "  developer/projects/$project_name.override.yml"
+    if [[ "$scaffold_repo" == true ]]; then
+      echo "Would create workflow repo scaffold in: $workflow_repo"
+      echo "  README.md"
+      echo "  .gitignore"
+      echo "  templates/partials/pre_window/node-nvm-use.sh.erb"
+      echo "  templates/partials/on_project_start/node-bootstrap.sh.erb"
+      echo "  templates/partials/windows/example-app.yml.erb"
+      echo "  developer/.gitkeep"
+      echo "  developer/projects/.gitkeep"
+    fi
+    echo "Would create project files:"
+    echo "  $project_file"
+    echo "  $override_file"
+
+    case "$alias_mode" in
+    create)
+      echo "Would create tmuxinator alias: $TMUXINATOR_DIR/$final_name.yml"
+      ;;
+    replace)
+      echo "Would replace tmuxinator alias: $TMUXINATOR_DIR/$final_name.yml"
+      ;;
+    same)
+      echo "tmuxinator alias already points to this project"
+      ;;
+    esac
     return 0
   fi
 
-  cp "$REPO_DIR/install.sh" "$target_dir/install.sh"
-  cp "$REPO_DIR/uninstall.sh" "$target_dir/uninstall.sh"
-  cp "$REPO_DIR/twf" "$target_dir/twf"
-  cp "$REPO_DIR/.install" "$target_dir/.install"
-  cp "$REPO_DIR/.gitignore" "$target_dir/.gitignore"
-  cp "$REPO_DIR/LICENSE" "$target_dir/LICENSE"
-  cp "$REPO_DIR/README.md" "$target_dir/README.md"
-  cp -R "$REPO_DIR/scripts" "$target_dir/scripts"
-  cp -R "$REPO_DIR/templates" "$target_dir/templates"
+  if [[ "$scaffold_repo" == true ]]; then
+    scaffold_workflow_repo "$workflow_repo"
+    write_repo_readme "$workflow_repo" "$final_name"
+    ok "Created workflow repository scaffold"
+  fi
 
-  mkdir -p "$target_dir/developer/projects"
-  cp "$REPO_DIR/developer/.gitkeep" "$target_dir/developer/.gitkeep"
-  cp "$REPO_DIR/developer/projects/.gitkeep" "$target_dir/developer/projects/.gitkeep"
-
-  rm -f "$target_dir/templates/projects/"*.yml
-  rm -f "$target_dir/developer/projects/"*.override.yml
-
-  sed \
-    -e "s/^name: .*/name: $project_name/" \
-    -e "s|^root: .*|root: .|" \
-    -e "s|load_project_override(\"example-includes\")|load_project_override(\"$project_name\")|" \
-    "$template_src" >"$project_file"
-
+  render_project_template "$final_name" >"$project_file"
   cp "$override_src" "$override_file"
 
-  chmod +x "$target_dir/install.sh" "$target_dir/uninstall.sh" "$target_dir/.install" "$target_dir/twf"
-  chmod +x "$target_dir/scripts"/*.sh
+  link_project_alias "$workflow_repo" "$final_name" "$alias_mode"
 
-  ok "Created project scaffold"
   ok "Created workflow template: $project_file"
   ok "Created developer override: $override_file"
   info "Next steps:"
-  echo "  twf install"
   echo "  twf validate"
   echo "  twf doctor"
-  echo "  twf start $project_name"
-}
-
-confirm_remove() {
-  local prompt="$1"
-  local response=""
-  read -r -p "$prompt [y/N]: " response
-  [[ "${response:-N}" =~ ^[Yy]$ ]]
+  echo "  twf start $final_name"
 }
 
 cmd_remove() {
@@ -285,7 +424,7 @@ cmd_remove() {
 Usage: twf remove <project-name> [--yes]
 
 Removes the tmuxinator alias for a project, then optionally removes
-local override/template files when running inside a twf project.
+local override/template files when running inside a workflow repo.
 EOF
       return 0
       ;;
@@ -325,7 +464,11 @@ EOF
   fi
 
   local repo
-  repo="$(active_repo_dir)"
+  repo="$(detect_workflow_repo)"
+  if [[ -z "$repo" ]]; then
+    info "No local workflow repository detected; skipped optional file cleanup."
+    return 0
+  fi
 
   local override_file="$repo/developer/projects/$project_name.override.yml"
   local template_file="$repo/templates/projects/$project_name.yml"
@@ -354,15 +497,15 @@ EOF
 }
 
 cmd_validate() {
-  local repo
-  repo="$(active_repo_dir)"
-  bash "$repo/scripts/validate-workflows.sh"
+  local workflow_repo
+  workflow_repo="$(require_workflow_repo)"
+  TWF_WORKFLOW_REPO="$workflow_repo" bash "$RUNTIME_DIR/scripts/validate-workflows.sh"
 }
 
 cmd_doctor() {
-  local repo
-  repo="$(active_repo_dir)"
-  bash "$repo/scripts/doctor.sh"
+  local workflow_repo
+  workflow_repo="$(require_workflow_repo)"
+  TWF_WORKFLOW_REPO="$workflow_repo" bash "$RUNTIME_DIR/scripts/doctor.sh"
 }
 
 cmd_update() {
@@ -371,24 +514,28 @@ cmd_update() {
     exit 1
   fi
 
-  if ! git -C "$REPO_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    error "twf update requires a git checkout at: $REPO_DIR"
+  if ! git -C "$RUNTIME_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    error "twf update requires a git checkout at: $RUNTIME_DIR"
     exit 1
   fi
 
-  info "Updating twf repo at $REPO_DIR"
-  git -C "$REPO_DIR" pull --ff-only
-  info "Re-running installation"
-  bash "$REPO_DIR/install.sh" --yes
+  info "Updating twf runtime repo at $RUNTIME_DIR"
+  git -C "$RUNTIME_DIR" pull --ff-only
+
+  local bin_dir="${TWF_BIN_DIR:-$DEFAULT_TWF_BIN_DIR}"
+  mkdir -p "$bin_dir"
+  ln -sfn "$RUNTIME_DIR/twf" "$bin_dir/twf"
+  ok "Refreshed CLI symlink: $bin_dir/twf"
+  ensure_bin_on_path "$bin_dir"
   ok "Update complete"
 }
 
 cmd_list() {
   local repo
-  repo="$(active_repo_dir)"
+  repo="$(detect_workflow_repo)"
 
-  echo "Template workflows ($repo/templates/projects):"
-  if [[ -d "$repo/templates/projects" ]]; then
+  if [[ -n "$repo" ]]; then
+    echo "Template workflows ($repo/templates/projects):"
     local files=()
     local file
     shopt -s nullglob
@@ -402,14 +549,16 @@ cmd_list() {
         echo "  - $(basename "${file%.yml}")"
       done
     fi
+    echo
   else
-    echo "  (missing templates/projects)"
+    info "No local workflow repo detected in current directory."
+    echo
   fi
 
-  echo
   echo "Installed tmuxinator workflows ($TMUXINATOR_DIR):"
   if [[ -d "$TMUXINATOR_DIR" ]]; then
     local installed=()
+    local item
     shopt -s nullglob
     installed=("$TMUXINATOR_DIR"/*.yml)
     shopt -u nullglob
@@ -417,7 +566,6 @@ cmd_list() {
     if [[ ${#installed[@]} -eq 0 ]]; then
       echo "  (none)"
     else
-      local item
       for item in "${installed[@]}"; do
         echo "  - $(basename "${item%.yml}")"
       done
@@ -482,7 +630,7 @@ EOF
   fi
 
   local can_remove_root=false
-  if [[ -f "$install_root/twf" && -f "$install_root/install.sh" ]]; then
+  if [[ -f "$install_root/twf" && -f "$install_root/scripts/bootstrap.sh" ]]; then
     can_remove_root=true
   fi
 
@@ -519,9 +667,6 @@ main() {
     ;;
   version | -v | --version)
     version
-    ;;
-  install)
-    cmd_install "$@"
     ;;
   add)
     cmd_add "$@"

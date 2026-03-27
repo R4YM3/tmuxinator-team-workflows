@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RUNTIME_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="${TWF_WORKFLOW_REPO:-$RUNTIME_DIR}"
 TEMPLATES_DIR="$REPO_DIR/templates/projects"
 DEVELOPER_DIR="$REPO_DIR/developer"
 DEVELOPER_PROJECTS_DIR="$DEVELOPER_DIR/projects"
@@ -295,7 +296,7 @@ install_env_file() {
 #!/usr/bin/env bash
 export REPOSITORIES_ROOT="$repositories_root"
 export TEAM_WORKFLOWS_REPO_DIR="$REPO_DIR"
-export TEAM_WORKFLOWS_HELPER_FILE="$REPO_DIR/templates/helpers/workflow.rb"
+export TEAM_WORKFLOWS_HELPER_FILE="$RUNTIME_DIR/templates/helpers/workflow.rb"
 EOF
 
   chmod +x "$ENV_FILE"
@@ -422,7 +423,7 @@ install_tmuxinator_projects() {
 }
 
 validate_templates() {
-  local helper_file="$REPO_DIR/templates/helpers/workflow.rb"
+  local helper_file="$RUNTIME_DIR/templates/helpers/workflow.rb"
   local project_file
 
   [[ -f "$helper_file" ]] || {
