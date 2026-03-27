@@ -28,7 +28,6 @@ Commands:
   remove <project-name> [--yes]
                                Remove tmuxinator alias; optionally remove local files
   validate                     Validate templates in current workflow repo
-  check                        Alias for validate
   doctor                       Run environment and template diagnostics
   update                       Pull latest twf runtime repo
   list                         List local templates and installed tmuxinator aliases
@@ -583,7 +582,39 @@ cmd_start() {
   fi
 
   local project_name="$1"
+  local alias_file="$TMUXINATOR_DIR/$project_name.yml"
+  local workflow_repo=""
+  local local_template=""
   shift
+
+  if ! command -v tmuxinator >/dev/null 2>&1; then
+    error "tmuxinator is not installed or not on PATH"
+    exit 1
+  fi
+
+  if [[ ! -e "$alias_file" ]]; then
+    workflow_repo="$(detect_workflow_repo)"
+    if [[ -n "$workflow_repo" ]]; then
+      local_template="$workflow_repo/templates/projects/$project_name.yml"
+      if [[ -f "$local_template" ]]; then
+        error "Missing tmuxinator alias for '$project_name': $alias_file"
+        info "Project template exists locally: $local_template"
+        info "Relink manually with:"
+        printf '  ln -s "%s" "%s"\n' "$local_template" "$alias_file"
+        exit 1
+      fi
+    fi
+
+    error "Project alias not found: $alias_file"
+    info "Add the project first with: twf add $project_name"
+    exit 1
+  fi
+
+  if [[ ! -L "$alias_file" && ! -f "$alias_file" ]]; then
+    error "Project alias path is not a file: $alias_file"
+    exit 1
+  fi
+
   tmuxinator start "$project_name" "$@"
 }
 
@@ -675,9 +706,6 @@ main() {
     cmd_remove "$@"
     ;;
   validate)
-    cmd_validate "$@"
-    ;;
-  check)
     cmd_validate "$@"
     ;;
   doctor)

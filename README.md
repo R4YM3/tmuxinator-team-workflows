@@ -2,7 +2,7 @@
 
 `twf` is a lightweight workflow layer on top of tmuxinator.
 
-Install `twf` once globally, then create one dedicated workflow repository (outside app repos) where you manage templates and personal overrides for all development environments.
+Install `twf` once globally, then create one dedicated workflow repository (outside app repos) to manage templates and personal overrides for all development environments.
 
 ## Problem this solves
 
@@ -13,7 +13,7 @@ Teams that use tmux/tmuxinator often hit the same issues:
 - Shared changes and personal tweaks get mixed together.
 - Project aliases in `~/.config/tmuxinator` drift across machines.
 
-`twf` solves this by keeping one workflow repository as the shared source of truth and generating/linking project aliases in a consistent way.
+`twf` solves this by using one workflow repository as the shared source of truth and creating project aliases consistently.
 
 ## Core idea
 
@@ -91,11 +91,11 @@ With `--dry-run`, rename/replace is still prompted, but no files are written and
 
 ## Commands
 
-Run `twf help` for latest command text.
+Run `twf help` for the latest command text.
 
 - `twf add <project-name> [--dry-run]`
 - `twf remove <project-name> [--yes]`
-- `twf validate` (`twf check` alias)
+- `twf validate`
 - `twf doctor`
 - `twf list`
 - `twf start <project> [args...]`
@@ -111,7 +111,7 @@ Start via twf:
 twf start my-workflow
 ```
 
-or directly via tmuxinator (because `twf add` links aliases):
+Or directly via tmuxinator (because `twf add` links aliases):
 
 ```bash
 tmuxinator start my-workflow

@@ -2,7 +2,12 @@
 set -euo pipefail
 
 RUNTIME_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORKFLOW_REPO_DIR="${TWF_WORKFLOW_REPO:-$RUNTIME_DIR}"
+WORKFLOW_REPO_DIR="${TWF_WORKFLOW_REPO:-}"
+
+[[ -n "$WORKFLOW_REPO_DIR" ]] || {
+  echo "[error] TWF_WORKFLOW_REPO is required" >&2
+  exit 1
+}
 
 TEMPLATES_DIR="$WORKFLOW_REPO_DIR/templates/projects"
 HELPER_FILE="$RUNTIME_DIR/templates/helpers/workflow.rb"
