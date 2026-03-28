@@ -1217,6 +1217,26 @@ resolved_project_config_file() {
   echo "$alias_file"
 }
 
+sanitize_tmux_env() {
+  if [[ -n "${TMUX:-}" ]]; then
+    if ! tmux display-message -p '#{client_tty}' >/dev/null 2>&1; then
+      unset TMUX
+    fi
+  fi
+}
+
+start_requested_no_attach() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+    --no-attach | --skip-attach)
+      return 0
+      ;;
+    esac
+  done
+  return 1
+}
+
 render_project_config_for_start() {
   local source_file="$1"
   local project_name="$2"
@@ -1302,7 +1322,6 @@ cmd_start() {
   local rendered_config_file=""
   local tmuxinator_status=0
   local helper_file="$RUNTIME_DIR/templates/helpers/workflow.rb"
-  shift
 
   if ! command -v tmuxinator >/dev/null 2>&1; then
     error "tmuxinator is not installed or not on PATH"
@@ -1353,15 +1372,39 @@ cmd_start() {
       exit 1
     fi
 
+    sanitize_tmux_env
+    set +e
     (
       cd "$workflow_repo"
       tmuxinator start -p "$rendered_config_file" "$@"
     )
     tmuxinator_status=$?
+    set -e
     rm -f "$rendered_config_file"
+    if [[ "$tmuxinator_status" -ne 0 ]] && tmux has-session -t "$project_name" 2>/dev/null; then
+      if start_requested_no_attach "$@"; then
+        return 0
+      fi
+      warn "Workflow session '$project_name' started, but auto-attach failed"
+      info "Attach manually: tmux attach-session -t $project_name"
+      return 0
+    fi
     return "$tmuxinator_status"
   else
+    sanitize_tmux_env
+    set +e
     tmuxinator start "$project_name" "$@"
+    tmuxinator_status=$?
+    set -e
+    if [[ "$tmuxinator_status" -ne 0 ]] && tmux has-session -t "$project_name" 2>/dev/null; then
+      if start_requested_no_attach "$@"; then
+        return 0
+      fi
+      warn "Workflow session '$project_name' started, but auto-attach failed"
+      info "Attach manually: tmux attach-session -t $project_name"
+      return 0
+    fi
+    return "$tmuxinator_status"
   fi
 }
 
