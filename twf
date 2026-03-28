@@ -1208,7 +1208,14 @@ cmd_start() {
   fi
 
   local project_name="$1"
+  if [[ "$project_name" == -* ]]; then
+    error "Invalid project name: $project_name"
+    info "Usage: twf start <project-name> [tmuxinator args...]"
+    exit 1
+  fi
+
   local alias_file="$TMUXINATOR_DIR/$project_name.yml"
+  local current_repo=""
   local workflow_repo=""
   local local_template=""
   local helper_file="$RUNTIME_DIR/templates/helpers/workflow.rb"
@@ -1244,8 +1251,10 @@ cmd_start() {
     exit 1
   fi
 
-  workflow_repo="$(detect_workflow_repo)"
-  if [[ -z "$workflow_repo" ]]; then
+  current_repo="$(detect_workflow_repo)"
+  if [[ -n "$current_repo" && -f "$current_repo/templates/projects/$project_name.yml" ]]; then
+    workflow_repo="$current_repo"
+  else
     workflow_repo="$(workflow_repo_from_alias "$project_name")"
   fi
 
