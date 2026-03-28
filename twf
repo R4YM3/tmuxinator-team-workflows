@@ -1200,6 +1200,41 @@ workflow_repo_from_alias() {
   echo ""
 }
 
+resolved_project_config_file() {
+  local project_name="$1"
+  local alias_file="$TMUXINATOR_DIR/$project_name.yml"
+
+  if [[ -L "$alias_file" ]]; then
+    local target
+    target="$(readlink "$alias_file")"
+    if [[ "$target" != /* ]]; then
+      target="$(cd "$(dirname "$alias_file")" && pwd)/$target"
+    fi
+    echo "$target"
+    return 0
+  fi
+
+  echo "$alias_file"
+}
+
+render_project_config_for_start() {
+  local source_file="$1"
+  local project_name="$2"
+  local workflow_repo="$3"
+  local helper_file="$4"
+  local rendered_file="$5"
+  local repositories_root="${REPOSITORIES_ROOT:-$workflow_repo}"
+
+  REPOSITORIES_ROOT="$repositories_root" TEAM_WORKFLOWS_REPO_DIR="$workflow_repo" TEAM_WORKFLOWS_HELPER_FILE="$helper_file" ruby -rerubi -e '
+file = ARGV[0]
+source = File.read(file)
+rendered = eval(Erubi::Engine.new(source).src)
+require "yaml"
+YAML.safe_load(rendered, aliases: true)
+puts rendered
+' "$source_file" >"$rendered_file"
+}
+
 infer_start_project_from_context() {
   local cwd_name
   cwd_name="$(basename "$PWD")"
@@ -1263,9 +1298,10 @@ cmd_start() {
   local current_repo=""
   local workflow_repo=""
   local local_template=""
+  local config_source_file=""
+  local rendered_config_file=""
+  local tmuxinator_status=0
   local helper_file="$RUNTIME_DIR/templates/helpers/workflow.rb"
-  local helper_env=""
-  local repo_env=""
   shift
 
   if ! command -v tmuxinator >/dev/null 2>&1; then
@@ -1307,13 +1343,22 @@ cmd_start() {
     check_plugins_ready_for_project "$workflow_repo" "$project_name"
   fi
 
-  helper_env="${TEAM_WORKFLOWS_HELPER_FILE:-$helper_file}"
-  repo_env="${TEAM_WORKFLOWS_REPO_DIR:-$workflow_repo}"
+  if [[ -n "$workflow_repo" ]]; then
+    config_source_file="$(resolved_project_config_file "$project_name")"
+    rendered_config_file="$(mktemp "${TMPDIR:-/tmp}/twf-${project_name}-XXXXXX")"
 
-  if [[ -n "$repo_env" ]]; then
-    TEAM_WORKFLOWS_HELPER_FILE="$helper_env" TEAM_WORKFLOWS_REPO_DIR="$repo_env" tmuxinator start "$project_name" "$@"
+    if ! render_project_config_for_start "$config_source_file" "$project_name" "$workflow_repo" "$helper_file" "$rendered_config_file"; then
+      rm -f "$rendered_config_file"
+      error "Failed to render workflow template for '$project_name'"
+      exit 1
+    fi
+
+    tmuxinator start -p "$rendered_config_file" "$@"
+    tmuxinator_status=$?
+    rm -f "$rendered_config_file"
+    return "$tmuxinator_status"
   else
-    TEAM_WORKFLOWS_HELPER_FILE="$helper_env" tmuxinator start "$project_name" "$@"
+    tmuxinator start "$project_name" "$@"
   fi
 }
 
