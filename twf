@@ -1200,18 +1200,63 @@ workflow_repo_from_alias() {
   echo ""
 }
 
-cmd_start() {
-  if [[ $# -lt 1 ]]; then
-    error "Missing project name"
-    info "Usage: twf start <project-name> [tmuxinator args...]"
-    exit 1
+infer_start_project_from_context() {
+  local cwd_name
+  cwd_name="$(basename "$PWD")"
+
+  if [[ -e "$TMUXINATOR_DIR/$cwd_name.yml" ]]; then
+    echo "$cwd_name"
+    return 0
   fi
 
-  local project_name="$1"
-  if [[ "$project_name" == -* ]]; then
-    error "Invalid project name: $project_name"
-    info "Usage: twf start <project-name> [tmuxinator args...]"
-    exit 1
+  local repo
+  repo="$(detect_workflow_repo)"
+  if [[ -z "$repo" ]]; then
+    echo ""
+    return 0
+  fi
+
+  if [[ -f "$repo/templates/projects/$cwd_name.yml" ]]; then
+    echo "$cwd_name"
+    return 0
+  fi
+
+  local files=()
+  shopt -s nullglob
+  files=("$repo/templates/projects"/*.yml)
+  shopt -u nullglob
+
+  if [[ ${#files[@]} -eq 1 ]]; then
+    echo "$(basename "${files[0]%.yml}")"
+    return 0
+  fi
+
+  echo ""
+}
+
+cmd_start() {
+  local project_name=""
+
+  if [[ $# -eq 0 || "${1:-}" == -* ]]; then
+    if [[ "${1:-}" == "--project" ]]; then
+      error "Invalid option for twf start: --project"
+      info "Usage: twf start <project-name> [tmuxinator args...]"
+      info "Tip: use 'twf start test-repo' or run from that repo and use 'twf start'"
+      exit 1
+    fi
+
+    project_name="$(infer_start_project_from_context)"
+    if [[ -z "$project_name" ]]; then
+      error "Missing project name and could not infer one from current directory"
+      info "Usage: twf start <project-name> [tmuxinator args...]"
+      info "Tip: run from your project repo and use 'twf start', or pass project explicitly"
+      exit 1
+    fi
+
+    info "No project name provided; inferred '$project_name'"
+  else
+    project_name="$1"
+    shift
   fi
 
   local alias_file="$TMUXINATOR_DIR/$project_name.yml"

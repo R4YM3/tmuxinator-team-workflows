@@ -154,7 +154,7 @@ Run `twf help` for the latest command text.
 - `twf validate`
 - `twf doctor`
 - `twf list`
-- `twf start <project> [args...]`
+- `twf start <project> [args...]` (or `twf start` to infer from current directory)
 - `twf update`
 - `twf uninstall [--yes]`
 - `twf version`
