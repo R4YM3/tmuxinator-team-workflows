@@ -63,6 +63,12 @@ cd "$HOME/code/team-workflows"
 twf add my-workflow
 ```
 
+Optional: scaffold with demo content:
+
+```bash
+twf add my-workflow --with-demo
+```
+
 This creates a workflow repo in the current directory with:
 
 - `README.md`
@@ -88,6 +94,7 @@ If a tmuxinator alias already exists, `twf add` prompts:
 - replace the existing alias (with confirmation)
 
 With `--dry-run`, rename/replace is still prompted, but no files are written and no replacement confirmation is asked.
+With `--with-demo`, the new project uses demo template/override content instead of the minimal starter.
 
 ## Plugins per project
 
@@ -135,7 +142,7 @@ Notes:
 
 Run `twf help` for the latest command text.
 
-- `twf add <project-name> [--dry-run]`
+- `twf add <project-name> [--dry-run] [--with-demo]`
 - `twf remove <project-name> [--yes]`
 - `twf plugin add <plugin> --project <project>`
 - `twf plugin remove <plugin> --project <project>`
