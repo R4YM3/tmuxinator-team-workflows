@@ -10,6 +10,68 @@ info() { printf "\033[1;34m[info]\033[0m %s\n" "$1"; }
 warn() { printf "\033[1;33m[warn]\033[0m %s\n" "$1"; }
 error() { printf "\033[1;31m[error]\033[0m %s\n" "$1" >&2; }
 
+detect_shell_rc() {
+  local shell_name
+  shell_name="$(basename "${SHELL:-}")"
+
+  case "$shell_name" in
+  zsh)
+    echo "$HOME/.zshrc"
+    ;;
+  bash)
+    if [[ -f "$HOME/.bash_profile" ]]; then
+      echo "$HOME/.bash_profile"
+    else
+      echo "$HOME/.bashrc"
+    fi
+    ;;
+  fish)
+    echo "$HOME/.config/fish/config.fish"
+    ;;
+  *)
+    echo ""
+    ;;
+  esac
+}
+
+ensure_path_persisted() {
+  local bin_dir="$1"
+  local rc_file
+  rc_file="$(detect_shell_rc)"
+
+  if [[ -z "$rc_file" ]]; then
+    warn "Could not detect shell rc file from SHELL=${SHELL:-unknown}"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$rc_file")"
+  [[ -f "$rc_file" ]] || touch "$rc_file"
+
+  local start_marker="# >>> twf path >>>"
+  local end_marker="# <<< twf path <<<"
+
+  if grep -qF "$start_marker" "$rc_file"; then
+    ok "PATH block already present in $rc_file"
+  else
+    if [[ "$rc_file" == *"/config.fish" ]]; then
+      {
+        printf '\n%s\n' "$start_marker"
+        printf 'if not contains "%s" $PATH\n' "$bin_dir"
+        printf '  set -gx PATH "%s" $PATH\n' "$bin_dir"
+        printf 'end\n'
+        printf '%s\n' "$end_marker"
+      } >>"$rc_file"
+    else
+      {
+        printf '\n%s\n' "$start_marker"
+        printf 'export PATH="%s:$PATH"\n' "$bin_dir"
+        printf '%s\n' "$end_marker"
+      } >>"$rc_file"
+    fi
+    ok "Added twf PATH block to $rc_file"
+  fi
+}
+
 if [[ -z "$TWF_REPO_URL" ]]; then
   error "TWF_REPO_URL is empty."
   info "Set TWF_REPO_URL and rerun, for example:"
@@ -41,6 +103,8 @@ ln -sfn "$TWF_INSTALL_ROOT/twf" "$TWF_BIN_DIR/twf"
 chmod +x "$TWF_INSTALL_ROOT/twf"
 ok "Installed CLI symlink: $TWF_BIN_DIR/twf"
 
+ensure_path_persisted "$TWF_BIN_DIR"
+
 case ":$PATH:" in
 *":$TWF_BIN_DIR:"*)
   ok "$TWF_BIN_DIR is on PATH"
@@ -55,6 +119,7 @@ esac
 ok "Bootstrap complete"
 echo
 info "Next steps:"
+echo "  export PATH=\"$TWF_BIN_DIR:\$PATH\""
 echo "  mkdir -p \"$HOME/code/team-workflows\" && cd \"$HOME/code/team-workflows\""
 echo "  twf add my-workflow"
 echo "  twf validate"

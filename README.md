@@ -40,6 +40,7 @@ You may not need `twf` when:
 ## Global install (CLI only)
 
 Bootstrap installs runtime files in `~/.local/share/twf` and the CLI symlink in `~/.local/bin/twf`.
+It also tries to add `~/.local/bin` to your shell rc file automatically.
 
 ```bash
 curl -fsSL "https://raw.githubusercontent.com/R4YM3/tmuxinator-team-workflows/main/scripts/bootstrap.sh" | bash
