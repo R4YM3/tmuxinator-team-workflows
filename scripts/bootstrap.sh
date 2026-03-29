@@ -10,6 +10,104 @@ info() { printf "\033[1;34m[info]\033[0m %s\n" "$1"; }
 warn() { printf "\033[1;33m[warn]\033[0m %s\n" "$1"; }
 error() { printf "\033[1;31m[error]\033[0m %s\n" "$1" >&2; }
 
+is_interactive() {
+  [[ -t 0 && -t 1 ]]
+}
+
+confirm_install() {
+  local prompt="$1"
+  local response=""
+  read -r -p "$prompt [Y/n]: " response
+  [[ -z "${response:-}" || "${response:-}" =~ ^[Yy]$ ]]
+}
+
+detect_package_manager() {
+  if command -v brew >/dev/null 2>&1; then
+    echo "brew"
+  elif command -v apt-get >/dev/null 2>&1; then
+    echo "apt-get"
+  elif command -v dnf >/dev/null 2>&1; then
+    echo "dnf"
+  elif command -v pacman >/dev/null 2>&1; then
+    echo "pacman"
+  else
+    echo ""
+  fi
+}
+
+install_requirements() {
+  local manager
+  manager="$(detect_package_manager)"
+
+  case "$manager" in
+  brew)
+    info "Installing required dependencies with Homebrew"
+    brew install tmux tmuxinator
+    ;;
+  apt-get)
+    info "Installing required dependencies with apt-get"
+    sudo apt-get update
+    sudo apt-get install -y tmux ruby-full
+    sudo gem install tmuxinator
+    ;;
+  dnf)
+    info "Installing required dependencies with dnf"
+    sudo dnf install -y tmux ruby rubygems
+    sudo gem install tmuxinator
+    ;;
+  pacman)
+    info "Installing required dependencies with pacman"
+    sudo pacman -Sy --noconfirm tmux ruby
+    sudo gem install tmuxinator
+    ;;
+  *)
+    error "Could not detect a supported package manager for automatic install"
+    info "Install these required dependencies manually and rerun bootstrap:"
+    echo "  - tmux"
+    echo "  - tmuxinator"
+    return 1
+    ;;
+  esac
+}
+
+ensure_required_dependencies() {
+  local missing=()
+  command -v tmux >/dev/null 2>&1 || missing+=("tmux")
+  command -v tmuxinator >/dev/null 2>&1 || missing+=("tmuxinator")
+
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    ok "Required dependencies are installed (tmux, tmuxinator)"
+    return 0
+  fi
+
+  warn "Missing required dependencies: ${missing[*]}"
+  info "twf requires both tmux and tmuxinator."
+
+  if ! is_interactive; then
+    error "Cannot prompt for installation in non-interactive mode"
+    info "Install required dependencies manually, then rerun bootstrap."
+    return 1
+  fi
+
+  if ! confirm_install "Install missing required dependencies now?"; then
+    error "Bootstrap cancelled because required dependencies are missing"
+    return 1
+  fi
+
+  install_requirements || return 1
+
+  command -v tmux >/dev/null 2>&1 || {
+    error "tmux is still missing after installation"
+    return 1
+  }
+  command -v tmuxinator >/dev/null 2>&1 || {
+    error "tmuxinator is still missing after installation"
+    return 1
+  }
+
+  ok "Installed required dependencies (tmux, tmuxinator)"
+}
+
 detect_shell_rc_files() {
   local shell_name
   shell_name="$(basename "${SHELL:-}")"
@@ -100,6 +198,8 @@ if ! command -v git >/dev/null 2>&1; then
   error "git is required for bootstrap"
   exit 1
 fi
+
+ensure_required_dependencies || exit 1
 
 mkdir -p "$(dirname "$TWF_INSTALL_ROOT")"
 

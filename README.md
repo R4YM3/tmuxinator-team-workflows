@@ -41,6 +41,7 @@ You may not need `twf` when:
 
 Bootstrap installs runtime files in `~/.local/share/twf` and the CLI symlink in `~/.local/bin/twf`.
 It also adds `~/.local/bin` to common shell rc files automatically (zsh, bash, fish, plus `~/.profile` fallback).
+If `tmux` and/or `tmuxinator` are missing, bootstrap prompts to install them before continuing.
 After bootstrap, restart your shell once (for example `exec "$SHELL" -l`).
 
 ```bash
@@ -238,9 +239,12 @@ Runtime internals (CLI scripts, helper plumbing, and plugin implementations) sta
 
 ## Requirements
 
+- git
 - tmux
 - tmuxinator
 - ruby (for ERB/YAML validation)
+
+`tmux` and `tmuxinator` are required. During bootstrap, if either is missing, `twf` asks for confirmation and can install them automatically on supported package managers.
 
 ## License
 
