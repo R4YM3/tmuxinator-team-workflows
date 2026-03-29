@@ -153,6 +153,7 @@ Run `twf help` for the latest command text.
 - `twf doctor`
 - `twf list`
 - `twf start <project> [args...]` (or `twf start` to infer from current directory)
+- `twf stop <project>` (or `twf stop` to infer from current directory)
 - `twf update`
 - `twf uninstall [--yes]`
 - `twf version`
@@ -170,6 +171,12 @@ Or directly via tmuxinator (because `twf add` links aliases):
 
 ```bash
 tmuxinator start my-workflow
+```
+
+Stop a running workflow session:
+
+```bash
+twf stop my-workflow
 ```
 
 ## Validate and diagnose

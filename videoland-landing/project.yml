@@ -1,0 +1,81 @@
+name: videoland-landing
+root: <%= ENV.fetch("VIDEOLAND_ROOT", "#{ENV.fetch("REPOSITORIES_ROOT", "#{ENV["HOME"]}/Development/rtl")}/landing-videoland") %>
+
+startup_window: frontend
+startup_pane: 1
+
+enable_pane_titles: true
+pane_title_position: top
+pane_title_format: "#{pane_index}: #{pane_title}"
+
+pre_window: >-
+  bash -lc 'export NVM_DIR="${NVM_DIR:-$HOME/.nvm}";
+  if [ -s "$NVM_DIR/nvm.sh" ]; then . "$NVM_DIR/nvm.sh";
+  elif [ -s "$(brew --prefix nvm 2>/dev/null)/nvm.sh" ]; then . "$(brew --prefix nvm 2>/dev/null)/nvm.sh";
+  fi;
+  if command -v nvm >/dev/null 2>&1; then nvm use || true;
+  else echo "nvm not found, continuing without it"; fi'
+
+on_project_start: >-
+  bash -lc 'echo "Tracing is manual. Run npm run jaeger:start when needed."'
+
+windows:
+  - frontend:
+      root: ./landing-frontend
+      layout: main-vertical
+      panes:
+        - editor: 'nvim'
+        - server: 'npm run dev || zsh -l'
+        - tests: 'npm run test:watch || zsh -l'
+        - codegen: 'npm run codegen:watch || zsh -l'
+
+  - qa:
+      root: ./landing-frontend
+      layout: even-horizontal
+      panes:
+        - lint: 'npm run lint || zsh -l'
+        - types: 'npm run check-types || zsh -l'
+        - test: 'npm run test || zsh -l'
+
+  - trace:
+      root: ./landing-frontend
+      layout: even-horizontal
+      panes:
+        - control: 'echo "Start tracing with: npm run jaeger:start" && echo "Then run: npm run dev:trace" && zsh -l'
+        - jaeger: 'echo "Jaeger UI -> http://localhost:16686" && zsh -l'
+
+  - perf:
+      root: ./landing-frontend
+      layout: even-horizontal
+      panes:
+        - build: 'echo "Run when needed: npm run build" && zsh -l'
+        - lighthouse: 'echo "Run when needed: npm run lighthouse" && zsh -l'
+
+  - strapi:
+      root: ./cc-backend-headless-cms
+      layout: main-vertical
+      panes:
+        - editor: 'nvim'
+        - server: 'yarn develop || zsh -l'
+
+  - titles:
+      root: ./videoland-titles
+      layout: main-vertical
+      panes:
+        - editor: 'nvim'
+        - server: 'ASPNETCORE_ENVIRONMENT=Development dotnet run --project src/Rtl.VideolandTitles.Api'
+
+  - ai:
+      panes:
+        - 'opencode || zsh -l'
+
+  - git:
+      layout: even-horizontal
+      panes:
+        - frontend: 'cd ./landing-frontend && lazygit'
+        - strapi: 'cd ./cc-backend-headless-cms && lazygit'
+        - titles: 'cd ./videoland-titles && lazygit'
+
+  - shell:
+      panes:
+        - 'zsh -l'

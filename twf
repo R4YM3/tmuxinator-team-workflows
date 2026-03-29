@@ -37,6 +37,7 @@ Commands:
   update                       Pull latest twf runtime repo
   list                         List local templates and installed tmuxinator aliases
   start <project> [args...]    Run tmuxinator start <project>
+  stop <project>               Stop tmux session for project
   uninstall [--yes]            Remove global twf CLI installation
   version                      Print twf version
   help                         Show this help
@@ -52,6 +53,7 @@ Examples:
   twf doctor
   twf update
   twf start landing-site
+  twf stop landing-site
 EOF
 }
 
@@ -1243,34 +1245,7 @@ workflow_repo_from_alias() {
     fi
   fi
 
-  local expected_suffix_old="/templates/projects/$project_name.yml"
-  if [[ "$target" == *"$expected_suffix_old" ]]; then
-    local repo
-    repo="${target%$expected_suffix_old}"
-    if [[ -d "$repo" ]]; then
-      echo "$repo"
-      return 0
-    fi
-  fi
-
   echo ""
-}
-
-resolved_alias_config_file() {
-  local project_name="$1"
-  local alias_file="$TMUXINATOR_DIR/$project_name.yml"
-
-  if [[ -L "$alias_file" ]]; then
-    local target
-    target="$(readlink "$alias_file")"
-    if [[ "$target" != /* ]]; then
-      target="$(cd "$(dirname "$alias_file")" && pwd)/$target"
-    fi
-    echo "$target"
-    return 0
-  fi
-
-  echo "$alias_file"
 }
 
 sanitize_tmux_env() {
@@ -1328,6 +1303,11 @@ override_data.delete("plugins")
 merged = deep_merge_hash(project_data, override_data)
 puts merged.to_yaml(line_width: -1)
 ' "$source_file" "$override_file" >"$rendered_file"
+}
+
+read_rendered_config_root() {
+  local config_file="$1"
+  ruby -ryaml -e 'data = YAML.safe_load(File.read(ARGV[0]), aliases: true); value = data.is_a?(Hash) ? data["root"] : nil; puts(value.is_a?(String) ? value : "")' "$config_file" 2>/dev/null || true
 }
 
 infer_start_project_from_context() {
@@ -1450,34 +1430,21 @@ cmd_start() {
     check_plugins_ready_for_project "$workflow_repo" "$project_name"
   fi
 
-  if [[ -n "$workflow_repo" ]]; then
-    config_source_file="$(resolved_alias_config_file "$project_name")"
-    if [[ ! -f "$config_source_file" ]]; then
-      config_source_file="$(project_template_file "$workflow_repo" "$project_name")"
-    fi
+  if [[ "$has_managed_project" == true ]]; then
+    config_source_file="$(project_template_file "$workflow_repo" "$project_name")"
     config_override_file="$(project_override_file "$workflow_repo" "$project_name")"
     rendered_config_file="$(mktemp "${TMPDIR:-/tmp}/twf-${project_name}-XXXXXX")"
 
-    if ! render_project_config_for_start "$config_source_file" "$config_override_file" "$rendered_config_file" 2>/dev/null; then
+    if ! render_project_config_for_start "$config_source_file" "$config_override_file" "$rendered_config_file"; then
       rm -f "$rendered_config_file"
+      error "Failed to render workflow template for '$project_name'"
+      return 1
+    fi
 
-      warn "Could not pre-render workflow template for '$project_name'; falling back to tmuxinator rendering"
-      sanitize_tmux_env
-      set +e
-      REPOSITORIES_ROOT="$workflow_repo" TEAM_WORKFLOWS_REPO_DIR="$workflow_repo" TEAM_WORKFLOWS_HELPER_FILE="$RUNTIME_DIR/templates/helpers/workflow.rb" tmuxinator start "$project_name" "$@"
-      tmuxinator_status=$?
-      set -e
-
-      if [[ "$tmuxinator_status" -ne 0 ]] && [[ "$had_session_before" == false ]] && tmux has-session -t "$project_name" 2>/dev/null; then
-        if start_requested_no_attach "$@"; then
-          return 0
-        fi
-        warn "Workflow session '$project_name' started, but auto-attach failed"
-        info "Attach manually: tmux attach-session -t $project_name"
-        return 0
-      fi
-
-      return "$tmuxinator_status"
+    local rendered_root
+    rendered_root="$(read_rendered_config_root "$rendered_config_file")"
+    if [[ -n "$rendered_root" && -d "$rendered_root" ]]; then
+      ensure_local_workflow_link "$project_name" "$(project_dir "$workflow_repo" "$project_name")" "$rendered_root"
     fi
 
     sanitize_tmux_env
@@ -1498,21 +1465,47 @@ cmd_start() {
       return 0
     fi
     return "$tmuxinator_status"
-  else
-    sanitize_tmux_env
-    set +e
-    tmuxinator start "$project_name" "$@"
-    tmuxinator_status=$?
-    set -e
-    if [[ "$tmuxinator_status" -ne 0 ]] && [[ "$had_session_before" == false ]] && tmux has-session -t "$project_name" 2>/dev/null; then
-      if start_requested_no_attach "$@"; then
-        return 0
-      fi
-      warn "Workflow session '$project_name' started, but auto-attach failed"
-      info "Attach manually: tmux attach-session -t $project_name"
+  fi
+
+  sanitize_tmux_env
+  set +e
+  tmuxinator start "$project_name" "$@"
+  tmuxinator_status=$?
+  set -e
+  if [[ "$tmuxinator_status" -ne 0 ]] && [[ "$had_session_before" == false ]] && tmux has-session -t "$project_name" 2>/dev/null; then
+    if start_requested_no_attach "$@"; then
       return 0
     fi
-    return "$tmuxinator_status"
+    warn "Workflow session '$project_name' started, but auto-attach failed"
+    info "Attach manually: tmux attach-session -t $project_name"
+    return 0
+  fi
+  return "$tmuxinator_status"
+}
+
+cmd_stop() {
+  local project_name="${1:-}"
+
+  if [[ -z "$project_name" || "$project_name" == -* ]]; then
+    project_name="$(infer_start_project_from_context)"
+    if [[ -z "$project_name" ]]; then
+      error "Missing project name"
+      info "Usage: twf stop <project-name>"
+      exit 1
+    fi
+    info "No project name provided; inferred '$project_name'"
+  fi
+
+  if ! command -v tmux >/dev/null 2>&1; then
+    error "tmux is not installed or not on PATH"
+    exit 1
+  fi
+
+  if tmux has-session -t "$project_name" 2>/dev/null; then
+    tmux kill-session -t "$project_name"
+    ok "Stopped tmux session: $project_name"
+  else
+    info "No running tmux session found: $project_name"
   fi
 }
 
@@ -1620,6 +1613,9 @@ main() {
     ;;
   start)
     cmd_start "$@"
+    ;;
+  stop)
+    cmd_stop "$@"
     ;;
   uninstall)
     cmd_uninstall "$@"
