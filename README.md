@@ -76,6 +76,8 @@ Then it creates:
   - `.twf/project.yml`
   - `.twf/developer.yml`
 
+`twf start` refreshes these local links automatically, so they stay in sync with the team workflow files.
+
 ## Add more projects
 
 From any codebase directory:
@@ -180,6 +182,8 @@ Stop a running workflow session:
 ```bash
 twf stop my-workflow
 ```
+
+Tip: edit workflow files directly from your project repo via `.twf/project.yml` and `.twf/developer.yml`.
 
 ## Validate and diagnose
 

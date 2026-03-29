@@ -28,6 +28,27 @@ windows:
         - server: 'npm run dev || zsh -l'
         - tests: 'npm run test:watch || zsh -l'
         - codegen: 'npm run codegen:watch || zsh -l'
+        - git: 'lazygit || zsh -l'
+
+  - ai:
+      panes:
+        - 'opencode || zsh -l'
+
+  - strapi:
+      root: ./cc-backend-headless-cms
+      layout: main-vertical
+      panes:
+        - editor: 'nvim'
+        - server: 'yarn develop || zsh -l'
+        - git: 'lazygit || zsh -l'
+
+  - videoland-titles:
+      root: ./videoland-titles
+      layout: main-vertical
+      panes:
+        - editor: 'nvim'
+        - server: 'ASPNETCORE_ENVIRONMENT=Development dotnet run --project src/Rtl.VideolandTitles.Api'
+        - git: 'lazygit || zsh -l'
 
   - qa:
       root: ./landing-frontend
@@ -51,30 +72,10 @@ windows:
         - build: 'echo "Run when needed: npm run build" && zsh -l'
         - lighthouse: 'echo "Run when needed: npm run lighthouse" && zsh -l'
 
-  - strapi:
-      root: ./cc-backend-headless-cms
-      layout: main-vertical
+  - twf:
+      root: ./.twf
       panes:
-        - editor: 'nvim'
-        - server: 'yarn develop || zsh -l'
-
-  - titles:
-      root: ./videoland-titles
-      layout: main-vertical
-      panes:
-        - editor: 'nvim'
-        - server: 'ASPNETCORE_ENVIRONMENT=Development dotnet run --project src/Rtl.VideolandTitles.Api'
-
-  - ai:
-      panes:
-        - 'opencode || zsh -l'
-
-  - git:
-      layout: even-horizontal
-      panes:
-        - frontend: 'cd ./landing-frontend && lazygit'
-        - strapi: 'cd ./cc-backend-headless-cms && lazygit'
-        - titles: 'cd ./videoland-titles && lazygit'
+        - 'nvim || zsh -l'
 
   - shell:
       panes:
