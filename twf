@@ -1233,17 +1233,44 @@ workflow_repo_from_alias() {
     target="$(cd "$(dirname "$alias_file")" && pwd)/$target"
   fi
 
-  local expected_suffix="/$project_name/project.yml"
-  if [[ "$target" == *"$expected_suffix" ]]; then
+  local expected_suffix_new="/$project_name/project.yml"
+  if [[ "$target" == *"$expected_suffix_new" ]]; then
     local repo
-    repo="${target%$expected_suffix}"
+    repo="${target%$expected_suffix_new}"
     if is_workflow_repo "$repo"; then
       echo "$repo"
       return 0
     fi
   fi
 
+  local expected_suffix_old="/templates/projects/$project_name.yml"
+  if [[ "$target" == *"$expected_suffix_old" ]]; then
+    local repo
+    repo="${target%$expected_suffix_old}"
+    if [[ -d "$repo" ]]; then
+      echo "$repo"
+      return 0
+    fi
+  fi
+
   echo ""
+}
+
+resolved_alias_config_file() {
+  local project_name="$1"
+  local alias_file="$TMUXINATOR_DIR/$project_name.yml"
+
+  if [[ -L "$alias_file" ]]; then
+    local target
+    target="$(readlink "$alias_file")"
+    if [[ "$target" != /* ]]; then
+      target="$(cd "$(dirname "$alias_file")" && pwd)/$target"
+    fi
+    echo "$target"
+    return 0
+  fi
+
+  echo "$alias_file"
 }
 
 sanitize_tmux_env() {
@@ -1373,6 +1400,12 @@ cmd_start() {
   local config_override_file=""
   local rendered_config_file=""
   local tmuxinator_status=0
+  local had_session_before=false
+  local has_managed_project=false
+
+  if tmux has-session -t "$project_name" 2>/dev/null; then
+    had_session_before=true
+  fi
 
   if ! command -v tmuxinator >/dev/null 2>&1; then
     error "tmuxinator is not installed or not on PATH"
@@ -1403,24 +1436,48 @@ cmd_start() {
   fi
 
   current_repo="$(read_configured_workflow_root)"
-  workflow_repo="$current_repo"
-  if [[ -z "$workflow_repo" || ! -d "$workflow_repo" ]]; then
+  if [[ -n "$current_repo" && -f "$(project_template_file "$current_repo" "$project_name")" ]]; then
+    workflow_repo="$current_repo"
+  else
     workflow_repo="$(workflow_repo_from_alias "$project_name")"
   fi
 
-  if [[ -n "$workflow_repo" ]]; then
+  if [[ -n "$workflow_repo" && -f "$(project_template_file "$workflow_repo" "$project_name")" ]]; then
+    has_managed_project=true
+  fi
+
+  if [[ "$has_managed_project" == true ]]; then
     check_plugins_ready_for_project "$workflow_repo" "$project_name"
   fi
 
   if [[ -n "$workflow_repo" ]]; then
-    config_source_file="$(project_template_file "$workflow_repo" "$project_name")"
+    config_source_file="$(resolved_alias_config_file "$project_name")"
+    if [[ ! -f "$config_source_file" ]]; then
+      config_source_file="$(project_template_file "$workflow_repo" "$project_name")"
+    fi
     config_override_file="$(project_override_file "$workflow_repo" "$project_name")"
     rendered_config_file="$(mktemp "${TMPDIR:-/tmp}/twf-${project_name}-XXXXXX")"
 
-    if ! render_project_config_for_start "$config_source_file" "$config_override_file" "$rendered_config_file"; then
+    if ! render_project_config_for_start "$config_source_file" "$config_override_file" "$rendered_config_file" 2>/dev/null; then
       rm -f "$rendered_config_file"
-      error "Failed to render workflow template for '$project_name'"
-      exit 1
+
+      warn "Could not pre-render workflow template for '$project_name'; falling back to tmuxinator rendering"
+      sanitize_tmux_env
+      set +e
+      REPOSITORIES_ROOT="$workflow_repo" TEAM_WORKFLOWS_REPO_DIR="$workflow_repo" TEAM_WORKFLOWS_HELPER_FILE="$RUNTIME_DIR/templates/helpers/workflow.rb" tmuxinator start "$project_name" "$@"
+      tmuxinator_status=$?
+      set -e
+
+      if [[ "$tmuxinator_status" -ne 0 ]] && [[ "$had_session_before" == false ]] && tmux has-session -t "$project_name" 2>/dev/null; then
+        if start_requested_no_attach "$@"; then
+          return 0
+        fi
+        warn "Workflow session '$project_name' started, but auto-attach failed"
+        info "Attach manually: tmux attach-session -t $project_name"
+        return 0
+      fi
+
+      return "$tmuxinator_status"
     fi
 
     sanitize_tmux_env
@@ -1432,7 +1489,7 @@ cmd_start() {
     tmuxinator_status=$?
     set -e
     rm -f "$rendered_config_file"
-    if [[ "$tmuxinator_status" -ne 0 ]] && tmux has-session -t "$project_name" 2>/dev/null; then
+    if [[ "$tmuxinator_status" -ne 0 ]] && [[ "$had_session_before" == false ]] && tmux has-session -t "$project_name" 2>/dev/null; then
       if start_requested_no_attach "$@"; then
         return 0
       fi
@@ -1447,7 +1504,7 @@ cmd_start() {
     tmuxinator start "$project_name" "$@"
     tmuxinator_status=$?
     set -e
-    if [[ "$tmuxinator_status" -ne 0 ]] && tmux has-session -t "$project_name" 2>/dev/null; then
+    if [[ "$tmuxinator_status" -ne 0 ]] && [[ "$had_session_before" == false ]] && tmux has-session -t "$project_name" 2>/dev/null; then
       if start_requested_no_attach "$@"; then
         return 0
       fi
