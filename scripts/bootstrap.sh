@@ -10,14 +10,22 @@ info() { printf "\033[1;34m[info]\033[0m %s\n" "$1"; }
 warn() { printf "\033[1;33m[warn]\033[0m %s\n" "$1"; }
 error() { printf "\033[1;31m[error]\033[0m %s\n" "$1" >&2; }
 
-is_interactive() {
-  [[ -t 0 && -t 1 ]]
+can_prompt_user() {
+  [[ -t 0 && -t 1 ]] || [[ -r /dev/tty ]]
 }
 
 confirm_install() {
   local prompt="$1"
   local response=""
-  read -r -p "$prompt [Y/n]: " response
+
+  if [[ -t 0 ]]; then
+    read -r -p "$prompt [Y/n]: " response
+  elif [[ -r /dev/tty ]]; then
+    read -r -p "$prompt [Y/n]: " response </dev/tty
+  else
+    return 1
+  fi
+
   [[ -z "${response:-}" || "${response:-}" =~ ^[Yy]$ ]]
 }
 
@@ -83,8 +91,8 @@ ensure_required_dependencies() {
   warn "Missing required dependencies: ${missing[*]}"
   info "twf requires both tmux and tmuxinator."
 
-  if ! is_interactive; then
-    error "Cannot prompt for installation in non-interactive mode"
+  if ! can_prompt_user; then
+    error "Cannot prompt for dependency installation in this shell"
     info "Install required dependencies manually, then rerun bootstrap."
     return 1
   fi
