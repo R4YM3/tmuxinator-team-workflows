@@ -143,6 +143,7 @@ twf service add web
 twf service add api
 twf service add worker
 twf service add redis
+twf service add redis --project other-project
 ```
 
 👉 Define once, reuse everywhere.
