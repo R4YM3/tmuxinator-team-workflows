@@ -274,6 +274,81 @@ hash_text() {
   fi
 }
 
+detect_suggested_services() {
+  local source_root="$1"
+  local suggestions=()
+
+  has_path_match() {
+    local base="$1"
+    shift
+    local pattern
+    for pattern in "$@"; do
+      if compgen -G "$base/$pattern" >/dev/null 2>&1; then
+        return 0
+      fi
+    done
+    return 1
+  }
+
+  if has_path_match "$source_root" \
+    "package.json" \
+    "pnpm-lock.yaml" \
+    "yarn.lock" \
+    "npm-shrinkwrap.json" \
+    "bun.lockb" \
+    "bun.lock" \
+    "bunfig.toml" \
+    "nx.json" \
+    "turbo.json" \
+    "lerna.json"; then
+    suggestions+=("node")
+  fi
+
+  if has_path_match "$source_root" \
+    "docker-compose.yml" \
+    "docker-compose.yaml" \
+    "compose.yml" \
+    "compose.yaml" \
+    "Dockerfile" \
+    "Dockerfile.*" \
+    ".devcontainer/devcontainer.json"; then
+    suggestions+=("containers")
+  fi
+
+  if has_path_match "$source_root" \
+    "requirements.txt" \
+    "requirements-*.txt" \
+    "pyproject.toml" \
+    "Pipfile" \
+    "poetry.lock" \
+    "setup.py" \
+    "setup.cfg"; then
+    suggestions+=("python")
+  fi
+
+  if has_path_match "$source_root" \
+    "*.sln" \
+    "*.csproj" \
+    "global.json"; then
+    suggestions+=("dotnet")
+  fi
+
+  if has_path_match "$source_root" \
+    "redis.conf" \
+    "redis/*.conf"; then
+    suggestions+=("redis")
+  fi
+
+  local seen=","
+  local service
+  for service in "${suggestions[@]}"; do
+    if [[ "$seen" != *",$service,"* ]]; then
+      echo "$service"
+      seen+="$service,"
+    fi
+  done
+}
+
 project_dir() {
   local repo="$1"
   local project_name="$2"
@@ -762,6 +837,12 @@ EOF
   project_root_dir="$(project_dir "$workflow_repo" "$final_name")"
   local override_file="$project_root_dir/developer.yml"
   project_file="$project_root_dir/project.yml"
+  local suggested_services=()
+  local suggested_service=""
+  while IFS= read -r suggested_service; do
+    [[ -n "$suggested_service" ]] || continue
+    suggested_services+=("$suggested_service")
+  done < <(detect_suggested_services "$source_root")
 
   if [[ "$dry_run" == true ]]; then
     info "Dry run: no files were written"
@@ -773,6 +854,9 @@ EOF
     echo "Would create project files:"
     echo "  $project_file"
     echo "  $override_file"
+    if [[ ${#suggested_services[@]} -gt 0 ]]; then
+      echo "Would auto-enable suggested services: ${suggested_services[*]}"
+    fi
     echo "Mode: minimal project content"
 
     case "$alias_mode" in
@@ -798,17 +882,31 @@ EOF
   mkdir -p "$project_root_dir"
   render_project_template "$final_name" "$source_root" >"$project_file"
 
-  cat >"$override_file" <<'EOF'
+  {
+    cat <<'EOF'
 services:
-  enabled: []
+  enabled:
+EOF
+    if [[ ${#suggested_services[@]} -eq 0 ]]; then
+      echo "    []"
+    else
+      for suggested_service in "${suggested_services[@]}"; do
+        echo "    - $suggested_service"
+      done
+    fi
+    cat <<'EOF'
   config: {}
 EOF
+  } >"$override_file"
 
   link_project_alias "$workflow_repo" "$final_name" "$alias_mode"
   ensure_local_workflow_link "$final_name" "$project_root_dir" "$source_root"
 
   ok "Created workflow template: $project_file"
   ok "Created developer override: $override_file"
+  if [[ ${#suggested_services[@]} -gt 0 ]]; then
+    info "Auto-enabled suggested services: ${suggested_services[*]}"
+  fi
   info "Next steps:"
   echo "  twf validate"
   echo "  twf doctor"

@@ -109,6 +109,8 @@ twf service install
 twf start
 ```
 
+`twf add` also suggests services automatically based on common project markers (for example Node, Python, containers, .NET, Redis).
+
 ---
 
 ## 🎯 Demo
