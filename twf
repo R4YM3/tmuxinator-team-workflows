@@ -116,6 +116,11 @@ read_configured_workflow_root() {
 
 save_configured_workflow_root() {
   local root="$1"
+  if [[ "$root" == "$RUNTIME_DIR" ]]; then
+    error "team workflow root cannot be the twf runtime repository"
+    info "Choose a separate directory, e.g. ../team-workflows"
+    exit 1
+  fi
   mkdir -p "$TWF_CONFIG_DIR"
   cat >"$TWF_CONFIG_FILE" <<EOF
 team_workflows_root: "$root"
@@ -132,6 +137,11 @@ ensure_workflow_root_for_add() {
   local configured
   configured="$(read_configured_workflow_root)"
   if [[ -n "$configured" ]]; then
+    if [[ "$configured" == "$RUNTIME_DIR" ]]; then
+      error "Configured team workflow root points to twf runtime repository"
+      info "Run twf add from your project and choose a separate workflow root"
+      exit 1
+    fi
     echo "$configured"
     return 0
   fi
