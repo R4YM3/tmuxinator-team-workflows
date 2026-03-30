@@ -4,14 +4,16 @@ Run your entire team's development environment with one command.
 
 `twf` standardizes how developers start, run, and customize development workflows — without sacrificing personal flexibility.
 
+`twf` is not about terminal tooling. It is about making your team faster, more consistent, and easier to onboard.
+
 ---
 
 ## ⚡ Try it in 30 seconds
 
 ```bash
 cd my-project
-twf add
-twf start
+twf add        # create workflow
+twf start      # run everything
 ```
 
 That’s it.
@@ -21,11 +23,11 @@ Your full development environment is running.
 
 ## ❌ Without `twf`
 
-* Open multiple terminals
-* Start services manually
-* Forget commands or dependencies
-* Ask teammates how to run things
-* Repeat this every day
+* Open 5 terminals
+* Run commands manually
+* Forget dependencies
+* Ask teammates
+* Waste time daily
 
 ---
 
@@ -35,9 +37,9 @@ Your full development environment is running.
 twf start
 ```
 
-* Everything starts
+* Everything runs
 * Same setup for everyone
-* No guessing, no drift
+* Zero guesswork
 
 ---
 
@@ -71,6 +73,8 @@ services:
     command: npm run dev
   api:
     command: npm run server
+  redis:
+    command: redis-server
 ```
 
 ---
@@ -109,9 +113,21 @@ twf service install
 twf start
 ```
 
-`twf add` also suggests services automatically based on common project markers (for example Node, Python, containers, .NET, Redis).
+## 🧠 Smart detection
 
-Core services maintained by `twf` include: `node`, `python`, `containers`, `dotnet`, `redis`, `java`, `go`, `ruby`, `php`, `rust`, `postgres`, `c`, `cpp`.
+`twf` automatically detects your project type and suggests services:
+
+* Node -> web/api
+* Python -> app/worker
+* Containers -> docker-based services
+
+👉 Less setup, more running.
+
+Built-in services include:
+
+* web / api
+* databases (`redis`, `postgres`)
+* language runtimes (`node`, `python`, and more)
 
 ---
 
@@ -179,9 +195,18 @@ Use `twf` when:
 * onboarding takes too long
 * developers run things differently
 
+## 💼 Why this matters
+
+* Faster onboarding
+* Fewer setup mistakes
+* Consistent environments
+* Less time wasted on setup
+
 ---
 
 ## ⚙️ Commands
+
+**💡 Commands automatically detect your current project.**
 
 Most commands infer the current project when you run them inside a linked repo (`.twf/project.yml`).
 Use `--project <name>` only when targeting another project.
@@ -229,7 +254,7 @@ Use `--project <name>` only when targeting another project.
 
 ## 🧪 Technical details
 
-Under the hood, `twf` uses tmuxinator to manage terminal sessions.
+Under the hood, `twf` uses tmuxinator.
 
 ---
 
