@@ -1,236 +1,145 @@
 # tmuxinator-team-workflows
 
-`twf` is a lightweight workflow layer on top of tmuxinator.
+Run your entire team's development environment with one command.
 
-Start your entire dev workflow with one command — together as a team.
+`twf` helps teams define shared development workflows as reusable building blocks called **services**, then compose those services into project workflows.
 
-Install `twf` once globally, then configure one team workflow root (outside app repos) to manage per-project workflow files for all development environments.
+## Problem vs Solution
 
-## Problem this solves
+Without a team workflow system:
 
-Teams that use tmux/tmuxinator often hit the same issues:
+- Developers open many terminals and start everything by hand.
+- Startup order and commands differ per person.
+- Onboarding depends on tribal knowledge.
+- Personal tweaks collide with team conventions.
 
-- Everyone starts services differently (different panes, commands, startup order).
-- New teammates need tribal knowledge to get a full session running.
-- Shared changes and personal tweaks get mixed together.
-- Project aliases in `~/.config/tmuxinator` drift across machines.
+With `twf`:
 
-`twf` solves this by using one team workflow root as the shared source of truth and creating project aliases consistently.
+- One command starts the full project workflow.
+- Teams share a consistent baseline setup.
+- New developers get productive faster.
+- Personal machine setup and team setup stay separate.
 
-## Core idea
+## Core Concepts
 
-- `tmuxinator` is still the runtime.
-- `twf` helps you scaffold, validate, and manage workflow projects.
-- Workflow files are stored in a dedicated team workflow root, separate from application code repositories.
+- `project`: a runnable development workflow for one codebase or workspace.
+- `service`: a reusable workflow unit (for example `web`, `api`, `worker`, `redis`).
+- `team workflow root`: shared folder where all project workflow files live.
+- `developer override`: project-level personal/custom config without changing shared templates.
 
-## Why use `twf` (and why not)
+Model:
 
-Use `twf` when:
+- A project is a composition of services.
+- Services are defined once and reused across projects (DRY).
+- Projects can still add project-specific behavior where needed.
 
-- You have multiple services/windows and want repeatable startup.
-- A team needs shared defaults plus personal overrides.
-- You want to version-control tmuxinator workflows as a dedicated asset.
+## Shared + Personal, Without Conflict
 
-You may not need `twf` when:
+`twf` keeps shared team workflow files in one place and also creates local links in each project repo:
 
-- You only run one simple tmux session manually.
-- You are working solo and do not need shared workflow conventions.
-- Plain `tmuxinator` files in one local repo already fit your needs.
+- `.twf/project.yml`
+- `.twf/developer.yml`
 
-`twf` is intentionally a thin layer. It does not replace tmuxinator or hide tmux; it standardizes collaboration around them.
+This lets developers edit workflow files from inside their project while keeping shared workflow ownership centralized.
 
-## Global install (CLI only)
+## Quickstart
 
-Bootstrap installs runtime files in `~/.local/share/twf` and the CLI symlink in `~/.local/bin/twf`.
-It also adds `~/.local/bin` to common shell rc files automatically (zsh, bash, fish, plus `~/.profile` fallback).
-If `tmux` and/or `tmuxinator` are missing, bootstrap prompts to install them before continuing.
-After bootstrap, restart your shell once (for example `exec "$SHELL" -l`).
+Install globally:
 
 ```bash
 curl -fsSL "https://raw.githubusercontent.com/R4YM3/tmuxinator-team-workflows/main/scripts/bootstrap.sh" | bash && exec "$SHELL" -l
 ```
 
-Optional bootstrap overrides:
+Bootstrap behavior:
+
+- installs `twf` runtime into `~/.local/share/twf`
+- links CLI at `~/.local/bin/twf`
+- updates shell PATH config
+- if `tmux` or `tmuxinator` is missing, prompts before installing required dependencies
+
+Create your first project workflow (run inside your codebase):
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/R4YM3/tmuxinator-team-workflows/main/scripts/bootstrap.sh" | TWF_REPO_URL="https://github.com/R4YM3/tmuxinator-team-workflows.git" TWF_INSTALL_ROOT="$HOME/.local/share/twf" TWF_BIN_DIR="$HOME/.local/bin" bash && exec "$SHELL" -l
-```
-
-## Add your first project
-
-Run `twf add` from your project directory:
-
-```bash
-cd /path/to/project-a
 twf add
+twf service add web --project my-project
+twf service add api --project my-project
+twf service install --project my-project
+twf start my-project
 ```
 
-On first run, `twf` asks where your team workflow root should live (default: `../team-workflows`) and saves it in `~/.config/twf/config.yml`.
+## Demo Flow
 
-Then it creates:
-
-- `<team-workflows-root>/project-a/project.yml`
-- `<team-workflows-root>/project-a/developer.yml`
-- tmuxinator alias: `${XDG_CONFIG_HOME:-$HOME/.config}/tmuxinator/project-a.yml`
-- local edit links in your repo:
-  - `.twf/project.yml`
-  - `.twf/developer.yml`
-
-`twf start` refreshes these local links automatically, so they stay in sync with the team workflow files.
-
-## Add more projects
-
-From any codebase directory:
+See value quickly with a working demo:
 
 ```bash
-cd /path/to/project-b
-twf add
+twf demo
 ```
 
-Or explicit name:
+This creates a demo workspace with:
+
+- Next.js web service
+- simple API service
+- ready-to-start workflow composition
+
+Then run:
 
 ```bash
-twf add project-b
+twf service install --project twf-demo
+twf start twf-demo
 ```
 
-If a tmuxinator alias already exists, `twf add` prompts:
+## Service-First Workflow
 
-- rename the project name, or
-- replace the existing alias (with confirmation)
-
-With `--dry-run`, rename/replace is still prompted, but no files are written and no replacement confirmation is asked.
-
-## Plugins per project
-
-Plugins are configured per project and installed per machine.
-
-Add plugins to a project configuration:
+Manage reusable services:
 
 ```bash
-twf plugin add node --project my-workflow
-twf plugin add dotnet --project my-workflow
+twf service list
+twf service add web --project my-project
+twf service add api --project my-project
+twf service add worker --project my-project
+twf service add redis --project my-project
+twf service install --project my-project
 ```
 
-Install configured plugins for one project:
+Services are machine-local to install, project-local to configure, and reusable across all projects.
+
+## Status & Discoverability
+
+Check what is running and what needs setup:
 
 ```bash
-twf plugin install --project my-workflow
+twf status
 ```
 
-Install configured plugins for all projects in the team workflow root:
+`twf status` shows:
 
-```bash
-twf plugin install --global
-```
-
-List plugins:
-
-```bash
-twf plugin list --project my-workflow
-twf plugin list --global
-```
-
-Remove plugin config from a project:
-
-```bash
-twf plugin remove node --project my-workflow
-```
-
-Notes:
-
-- `twf plugin add/remove` updates project config only.
-- `twf plugin install` performs machine-local setup.
-- `twf start <project>` checks plugin install markers and asks for `twf plugin install --project <project>` when missing/outdated.
+- running project sessions
+- project-by-project service readiness
+- which services still need installation
 
 ## Commands
 
-Run `twf help` for the latest command text.
+Run `twf help` for latest details.
 
 - `twf add [project-name] [--dry-run]`
 - `twf remove <project-name> [--yes]`
-- `twf plugin add <plugin> --project <project>`
-- `twf plugin remove <plugin> --project <project>`
-- `twf plugin list [--project <project> | --global]`
-- `twf plugin install --project <project> [--yes]`
-- `twf plugin install --global [--yes]`
+- `twf service add <service> --project <project>`
+- `twf service remove <service> --project <project>`
+- `twf service list [--project <project> | --global]`
+- `twf service install --project <project> [--yes]`
+- `twf service install --global [--yes]`
+- `twf demo [target-dir]`
+- `twf status`
+- `twf start <project> [args...]`
+- `twf stop <project>`
+- `twf list`
 - `twf validate`
 - `twf doctor`
-- `twf list`
-- `twf start <project> [args...]` (or `twf start` to infer from current directory)
-- `twf stop <project>` (or `twf stop` to infer from current directory)
 - `twf update`
 - `twf uninstall [--yes]`
 - `twf version`
 
-## Start workflows
-
-Start via twf:
-
-```bash
-twf plugin install --project my-workflow
-twf start my-workflow
-```
-
-Or directly via tmuxinator (because `twf add` links aliases):
-
-```bash
-tmuxinator start my-workflow
-```
-
-Stop a running workflow session:
-
-```bash
-twf stop my-workflow
-```
-
-Tip: edit workflow files directly from your project repo via `.twf/project.yml` and `.twf/developer.yml`.
-
-## Validate and diagnose
-
-Run from anywhere after your team workflow root is configured:
-
-```bash
-twf validate
-twf doctor
-```
-
-## Remove workflows
-
-Remove alias and optionally local files:
-
-```bash
-twf remove my-workflow
-```
-
-Non-interactive:
-
-```bash
-twf remove my-workflow --yes
-```
-
-`twf remove` removes:
-
-- `${XDG_CONFIG_HOME:-$HOME/.config}/tmuxinator/<project>.yml`
-- `<team-workflows-root>/<project>/` (with confirmation, or immediately with `--yes`)
-
-## Uninstall CLI
-
-Remove global CLI/runtime install:
-
-```bash
-twf uninstall
-```
-
-This removes:
-
-- `~/.local/bin/twf`
-- `~/.local/share/twf` (when confirmed, or with `--yes`)
-
-It does not remove team workflow projects or tmuxinator aliases.
-
-## Workflow repo layout
-
-Workflow content is stored per project in your team workflow root:
+## Team Workflow Root Layout
 
 ```text
 <team-workflows-root>/
@@ -243,29 +152,29 @@ Workflow content is stored per project in your team workflow root:
     └── developer.yml
 ```
 
-Runtime internals (CLI scripts, helper plumbing, and plugin implementations) stay in `~/.local/share/twf`.
+## Technical Details (Implementation)
 
-## Notes on customization
+Implementation details are intentionally secondary:
 
-- Day-to-day customization should happen in each project folder:
-  - `<team-workflows-root>/<project>/project.yml`
-  - `<team-workflows-root>/<project>/developer.yml`
-- Avoid editing runtime internals in `~/.local/share/twf` unless you are maintaining the framework itself.
+- `twf` uses tmuxinator as runtime engine.
+- tmux sessions/windows/panes are generated from project workflow files.
+- runtime scripts and service implementations live in `~/.local/share/twf`.
+
+## Foundation for UI
+
+The project/service model is designed to support a future Tauri app:
+
+- projects and services have predictable file-based configuration
+- service health and session state are queryable (`twf status`)
+- team and developer concerns are cleanly separated
 
 ## Requirements
 
 - git
 - tmux
 - tmuxinator
-- ruby (for ERB/YAML validation)
-
-`tmux` and `tmuxinator` are required. During bootstrap, if either is missing, `twf` asks for confirmation and can install them automatically on supported package managers.
+- ruby
 
 ## License
 
 MIT
-
-## References
-
-- tmux: https://github.com/tmux/tmux
-- tmuxinator: https://github.com/tmuxinator/tmuxinator

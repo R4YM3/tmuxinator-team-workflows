@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PLUGIN_VERSION="1"
+SERVICE_VERSION="1"
 
 ok() { printf "[ok] %s\n" "$1"; }
 info() { printf "[info] %s\n" "$1"; }
@@ -18,7 +18,7 @@ load_nvm() {
   fi
 }
 
-check_plugin() {
+check_service() {
   load_nvm
 
   local missing=0
@@ -69,7 +69,7 @@ install_nvm() {
   return 1
 }
 
-install_plugin() {
+install_service() {
   load_nvm
 
   if ! command -v nvm >/dev/null 2>&1; then
@@ -94,13 +94,13 @@ main() {
   local command="${1:-}"
   case "$command" in
   version)
-    echo "$PLUGIN_VERSION"
+    echo "$SERVICE_VERSION"
     ;;
   check)
-    check_plugin
+    check_service
     ;;
   install)
-    install_plugin
+    install_service
     ;;
   *)
     echo "Usage: node.sh <version|check|install>" >&2

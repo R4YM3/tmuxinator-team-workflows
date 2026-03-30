@@ -14,8 +14,8 @@ DEFAULT_TWF_BIN_DIR="${HOME}/.local/bin"
 TMUXINATOR_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tmuxinator"
 TWF_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/twf"
 TWF_CONFIG_FILE="$TWF_CONFIG_DIR/config.yml"
-PLUGINS_DIR="$RUNTIME_DIR/plugins"
-PLUGIN_STATE_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/twf/state/plugins"
+SERVICES_DIR="$RUNTIME_DIR/services"
+SERVICE_STATE_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/twf/state/services"
 
 ok() { printf "\033[1;32m[ok]\033[0m %s\n" "$1"; }
 info() { printf "\033[1;34m[info]\033[0m %s\n" "$1"; }
@@ -28,16 +28,18 @@ Usage: twf <command> [options]
 
 Commands:
   add [project-name] [--dry-run]
-                               Add project workflow to team workflow root
+                               Create a project workflow
   remove <project-name> [--yes]
-                               Remove tmuxinator alias; optionally remove local files
-  plugin <command> [...]       Manage project plugins
-  validate                     Validate templates in current workflow repo
-  doctor                       Run environment and template diagnostics
+                               Remove project workflow and alias
+  service <command> [...]       Manage reusable services
+  demo [target-dir]             Scaffold a working demo project
+  status                       Show running projects and service health
+  validate                     Validate workflow files
+  doctor                       Run environment diagnostics
   update                       Pull latest twf runtime repo
-  list                         List local templates and installed tmuxinator aliases
-  start <project> [args...]    Run tmuxinator start <project>
-  stop <project>               Stop tmux session for project
+  list                         List projects and installed aliases
+  start <project> [args...]    Start a project workflow
+  stop <project>               Stop a running project workflow
   uninstall [--yes]            Remove global twf CLI installation
   version                      Print twf version
   help                         Show this help
@@ -47,8 +49,10 @@ Examples:
   twf add landing-site --dry-run
   twf add
   twf remove landing-site
-  twf plugin add node --project landing-site
-  twf plugin install --project landing-site
+  twf service add node --project landing-site
+  twf service install --project landing-site
+  twf demo
+  twf status
   twf validate
   twf doctor
   twf update
@@ -184,34 +188,34 @@ require_workflow_repo() {
   echo "$repo"
 }
 
-plugin_script_path() {
-  local plugin_name="$1"
-  echo "$PLUGINS_DIR/$plugin_name.sh"
+service_script_path() {
+  local service_name="$1"
+  echo "$SERVICES_DIR/$service_name.sh"
 }
 
-plugin_exists() {
-  local plugin_name="$1"
-  [[ -f "$(plugin_script_path "$plugin_name")" ]]
+service_exists() {
+  local service_name="$1"
+  [[ -f "$(service_script_path "$service_name")" ]]
 }
 
-require_plugin() {
-  local plugin_name="$1"
-  if ! plugin_exists "$plugin_name"; then
-    error "Unknown plugin: $plugin_name"
-    info "Run 'twf plugin list' to see available plugins."
+require_service() {
+  local service_name="$1"
+  if ! service_exists "$service_name"; then
+    error "Unknown service: $service_name"
+    info "Run 'twf service list' to see available services."
     exit 1
   fi
 }
 
-list_available_plugins() {
-  if [[ ! -d "$PLUGINS_DIR" ]]; then
+list_available_services() {
+  if [[ ! -d "$SERVICES_DIR" ]]; then
     return 0
   fi
 
   local files=()
   local file
   shopt -s nullglob
-  files=("$PLUGINS_DIR"/*.sh)
+  files=("$SERVICES_DIR"/*.sh)
   shopt -u nullglob
 
   for file in "${files[@]}"; do
@@ -261,7 +265,7 @@ ensure_project_exists() {
   fi
 }
 
-enabled_plugins_for_project() {
+enabled_services_for_project() {
   local repo="$1"
   local project_name="$2"
   local override_file
@@ -274,40 +278,40 @@ if !File.exist?(path)
 end
 raw = YAML.safe_load(File.read(path), aliases: false)
 data = raw.is_a?(Hash) ? raw : {}
-plugins = data["plugins"].is_a?(Hash) ? data["plugins"] : {}
-enabled = plugins["enabled"].is_a?(Array) ? plugins["enabled"] : []
+services = data["services"].is_a?(Hash) ? data["services"] : {}
+enabled = services["enabled"].is_a?(Array) ? services["enabled"] : []
 enabled.select { |v| v.is_a?(String) && !v.strip.empty? }.each { |v| puts v }
 ' "$override_file"
 }
 
-plugin_config_json_for_project() {
+service_config_json_for_project() {
   local repo="$1"
   local project_name="$2"
-  local plugin_name="$3"
+  local service_name="$3"
   local override_file
   override_file="$(project_override_file "$repo" "$project_name")"
 
   ruby -ryaml -rjson -e '
 path = ARGV[0]
-plugin = ARGV[1]
+service = ARGV[1]
 if !File.exist?(path)
   puts "{}"
   exit 0
 end
 raw = YAML.safe_load(File.read(path), aliases: false)
 data = raw.is_a?(Hash) ? raw : {}
-plugins = data["plugins"].is_a?(Hash) ? data["plugins"] : {}
-config = plugins["config"].is_a?(Hash) ? plugins["config"] : {}
-value = config[plugin]
+services = data["services"].is_a?(Hash) ? data["services"] : {}
+config = services["config"].is_a?(Hash) ? services["config"] : {}
+value = config[service]
 value = {} unless value.is_a?(Hash)
 puts JSON.generate(value)
-' "$override_file" "$plugin_name"
+' "$override_file" "$service_name"
 }
 
-add_plugin_to_project_config() {
+add_service_to_project_config() {
   local repo="$1"
   local project_name="$2"
-  local plugin_name="$3"
+  local service_name="$3"
   local override_file
   override_file="$(project_override_file "$repo" "$project_name")"
 
@@ -316,23 +320,23 @@ add_plugin_to_project_config() {
 
   ruby -ryaml -e '
 path = ARGV[0]
-plugin = ARGV[1]
+service = ARGV[1]
 raw = YAML.safe_load(File.read(path), aliases: false)
 data = raw.is_a?(Hash) ? raw : {}
-data["plugins"] = {} unless data["plugins"].is_a?(Hash)
-plugins = data["plugins"]
-plugins["enabled"] = [] unless plugins["enabled"].is_a?(Array)
-enabled = plugins["enabled"].select { |v| v.is_a?(String) && !v.strip.empty? }
-enabled << plugin unless enabled.include?(plugin)
-plugins["enabled"] = enabled
+data["services"] = {} unless data["services"].is_a?(Hash)
+services = data["services"]
+services["enabled"] = [] unless services["enabled"].is_a?(Array)
+enabled = services["enabled"].select { |v| v.is_a?(String) && !v.strip.empty? }
+enabled << service unless enabled.include?(service)
+services["enabled"] = enabled
 File.write(path, data.to_yaml(line_width: -1))
-' "$override_file" "$plugin_name"
+' "$override_file" "$service_name"
 }
 
-remove_plugin_from_project_config() {
+remove_service_from_project_config() {
   local repo="$1"
   local project_name="$2"
-  local plugin_name="$3"
+  local service_name="$3"
   local override_file
   override_file="$(project_override_file "$repo" "$project_name")"
 
@@ -342,45 +346,45 @@ remove_plugin_from_project_config() {
 
   ruby -ryaml -e '
 path = ARGV[0]
-plugin = ARGV[1]
+service = ARGV[1]
 raw = YAML.safe_load(File.read(path), aliases: false)
 data = raw.is_a?(Hash) ? raw : {}
-plugins = data["plugins"].is_a?(Hash) ? data["plugins"] : nil
-if plugins
-  if plugins["enabled"].is_a?(Array)
-    plugins["enabled"] = plugins["enabled"].select { |v| v.is_a?(String) && v != plugin }
+services = data["services"].is_a?(Hash) ? data["services"] : nil
+if services
+  if services["enabled"].is_a?(Array)
+    services["enabled"] = services["enabled"].select { |v| v.is_a?(String) && v != service }
   end
-  if plugins["config"].is_a?(Hash)
-    plugins["config"].delete(plugin)
+  if services["config"].is_a?(Hash)
+    services["config"].delete(service)
   end
-  plugins.delete("enabled") if plugins["enabled"].is_a?(Array) && plugins["enabled"].empty?
-  plugins.delete("config") if plugins["config"].is_a?(Hash) && plugins["config"].empty?
-  data.delete("plugins") if plugins.empty?
+  services.delete("enabled") if services["enabled"].is_a?(Array) && services["enabled"].empty?
+  services.delete("config") if services["config"].is_a?(Hash) && services["config"].empty?
+  data.delete("services") if services.empty?
 end
 File.write(path, data.to_yaml(line_width: -1))
-' "$override_file" "$plugin_name"
+' "$override_file" "$service_name"
 }
 
-plugin_state_file() {
+service_state_file() {
   local project_name="$1"
-  local plugin_name="$2"
-  echo "$PLUGIN_STATE_ROOT/$project_name/$plugin_name.state"
+  local service_name="$2"
+  echo "$SERVICE_STATE_ROOT/$project_name/$service_name.state"
 }
 
-plugin_version() {
-  local plugin_name="$1"
-  local plugin_script
-  plugin_script="$(plugin_script_path "$plugin_name")"
-  bash "$plugin_script" version
+service_version() {
+  local service_name="$1"
+  local service_script
+  service_script="$(service_script_path "$service_name")"
+  bash "$service_script" version
 }
 
-plugin_state_matches() {
+service_state_matches() {
   local project_name="$1"
-  local plugin_name="$2"
+  local service_name="$2"
   local expected_version="$3"
   local expected_hash="$4"
   local state_file
-  state_file="$(plugin_state_file "$project_name" "$plugin_name")"
+  state_file="$(service_state_file "$project_name" "$service_name")"
 
   [[ -f "$state_file" ]] || return 1
 
@@ -396,13 +400,13 @@ plugin_state_matches() {
   [[ "$saved_version" == "$expected_version" && "$saved_hash" == "$expected_hash" ]]
 }
 
-write_plugin_state() {
+write_service_state() {
   local project_name="$1"
-  local plugin_name="$2"
+  local service_name="$2"
   local version="$3"
   local config_hash="$4"
   local state_file
-  state_file="$(plugin_state_file "$project_name" "$plugin_name")"
+  state_file="$(service_state_file "$project_name" "$service_name")"
 
   mkdir -p "$(dirname "$state_file")"
   cat >"$state_file" <<EOF
@@ -483,7 +487,7 @@ This repository is managed with \`twf\` and is intended to live outside applicat
 Typical flow:
 
 \`\`\`bash
-twf plugin install --project $first_project
+twf service install --project $first_project
 twf validate
 twf doctor
 twf start $first_project
@@ -755,7 +759,7 @@ EOF
   render_project_template "$final_name" "$source_root" >"$project_file"
 
   cat >"$override_file" <<'EOF'
-plugins:
+services:
   enabled: []
   config: {}
 EOF
@@ -840,97 +844,97 @@ EOF
   fi
 }
 
-load_enabled_plugins_for_project() {
+load_enabled_services_for_project() {
   local repo="$1"
   local project_name="$2"
-  local plugin=""
+  local service=""
 
-  LOADED_PROJECT_PLUGINS=()
-  while IFS= read -r plugin; do
-    [[ -n "$plugin" ]] || continue
-    LOADED_PROJECT_PLUGINS+=("$plugin")
-  done < <(enabled_plugins_for_project "$repo" "$project_name")
+  LOADED_PROJECT_SERVICES=()
+  while IFS= read -r service; do
+    [[ -n "$service" ]] || continue
+    LOADED_PROJECT_SERVICES+=("$service")
+  done < <(enabled_services_for_project "$repo" "$project_name")
 }
 
-build_plugin_state_context() {
+build_service_state_context() {
   local repo="$1"
   local project_name="$2"
-  local plugin_name="$3"
+  local service_name="$3"
 
-  PLUGIN_CTX_SCRIPT="$(plugin_script_path "$plugin_name")"
-  PLUGIN_CTX_VERSION="$(plugin_version "$plugin_name")"
-  PLUGIN_CTX_CONFIG_JSON="$(plugin_config_json_for_project "$repo" "$project_name" "$plugin_name")"
-  PLUGIN_CTX_CONFIG_HASH="$(hash_text "$PLUGIN_CTX_CONFIG_JSON")"
+  SERVICE_CTX_SCRIPT="$(service_script_path "$service_name")"
+  SERVICE_CTX_VERSION="$(service_version "$service_name")"
+  SERVICE_CTX_CONFIG_JSON="$(service_config_json_for_project "$repo" "$project_name" "$service_name")"
+  SERVICE_CTX_CONFIG_HASH="$(hash_text "$SERVICE_CTX_CONFIG_JSON")"
 }
 
-run_plugin_install_for_project() {
+run_service_install_for_project() {
   local repo="$1"
   local project_name="$2"
   local assume_yes="$3"
-  local plugin=""
+  local service=""
 
   ensure_project_exists "$repo" "$project_name"
-  load_enabled_plugins_for_project "$repo" "$project_name"
+  load_enabled_services_for_project "$repo" "$project_name"
 
-  if [[ ${#LOADED_PROJECT_PLUGINS[@]} -eq 0 ]]; then
-    info "No plugins configured for project '$project_name'."
+  if [[ ${#LOADED_PROJECT_SERVICES[@]} -eq 0 ]]; then
+    info "No services configured for project '$project_name'."
     return 0
   fi
 
-  for plugin in "${LOADED_PROJECT_PLUGINS[@]}"; do
-    require_plugin "$plugin"
-    build_plugin_state_context "$repo" "$project_name" "$plugin"
+  for service in "${LOADED_PROJECT_SERVICES[@]}"; do
+    require_service "$service"
+    build_service_state_context "$repo" "$project_name" "$service"
 
-    if plugin_state_matches "$project_name" "$plugin" "$PLUGIN_CTX_VERSION" "$PLUGIN_CTX_CONFIG_HASH"; then
-      ok "Plugin '$plugin' is already installed for project '$project_name'"
+    if service_state_matches "$project_name" "$service" "$SERVICE_CTX_VERSION" "$SERVICE_CTX_CONFIG_HASH"; then
+      ok "Service '$service' is already installed for project '$project_name'"
       continue
     fi
 
-    info "Installing plugin '$plugin' for project '$project_name'"
-    if ! TWF_PLUGIN_CONFIG_JSON="$PLUGIN_CTX_CONFIG_JSON" TWF_PLUGIN_ASSUME_YES="$assume_yes" bash "$PLUGIN_CTX_SCRIPT" install; then
-      error "Plugin install failed: $plugin"
+    info "Installing service '$service' for project '$project_name'"
+    if ! TWF_SERVICE_CONFIG_JSON="$SERVICE_CTX_CONFIG_JSON" TWF_SERVICE_ASSUME_YES="$assume_yes" bash "$SERVICE_CTX_SCRIPT" install; then
+      error "Service install failed: $service"
       exit 1
     fi
 
-    if ! TWF_PLUGIN_CONFIG_JSON="$PLUGIN_CTX_CONFIG_JSON" bash "$PLUGIN_CTX_SCRIPT" check; then
-      error "Plugin check failed after install: $plugin"
+    if ! TWF_SERVICE_CONFIG_JSON="$SERVICE_CTX_CONFIG_JSON" bash "$SERVICE_CTX_SCRIPT" check; then
+      error "Service check failed after install: $service"
       exit 1
     fi
 
-    write_plugin_state "$project_name" "$plugin" "$PLUGIN_CTX_VERSION" "$PLUGIN_CTX_CONFIG_HASH"
-    ok "Plugin ready: $plugin"
+    write_service_state "$project_name" "$service" "$SERVICE_CTX_VERSION" "$SERVICE_CTX_CONFIG_HASH"
+    ok "Service ready: $service"
   done
 }
 
-check_plugins_ready_for_project() {
+check_services_ready_for_project() {
   local repo="$1"
   local project_name="$2"
-  local plugin=""
+  local service=""
 
   ensure_project_exists "$repo" "$project_name"
-  load_enabled_plugins_for_project "$repo" "$project_name"
+  load_enabled_services_for_project "$repo" "$project_name"
 
-  if [[ ${#LOADED_PROJECT_PLUGINS[@]} -eq 0 ]]; then
+  if [[ ${#LOADED_PROJECT_SERVICES[@]} -eq 0 ]]; then
     return 0
   fi
 
-  for plugin in "${LOADED_PROJECT_PLUGINS[@]}"; do
-    require_plugin "$plugin"
-    build_plugin_state_context "$repo" "$project_name" "$plugin"
+  for service in "${LOADED_PROJECT_SERVICES[@]}"; do
+    require_service "$service"
+    build_service_state_context "$repo" "$project_name" "$service"
 
-    if ! plugin_state_matches "$project_name" "$plugin" "$PLUGIN_CTX_VERSION" "$PLUGIN_CTX_CONFIG_HASH"; then
-      error "Plugin '$plugin' is not installed or is out of date for project '$project_name'"
-      info "Run: twf plugin install --project $project_name"
+    if ! service_state_matches "$project_name" "$service" "$SERVICE_CTX_VERSION" "$SERVICE_CTX_CONFIG_HASH"; then
+      error "Service '$service' is not installed or is out of date for project '$project_name'"
+      info "Run: twf service install --project $project_name"
       exit 1
     fi
   done
 }
 
-parse_plugin_project_args() {
+parse_service_project_args() {
   local usage="$1"
   shift
 
-  PARSED_PLUGIN_NAME=""
+  PARSED_SERVICE_NAME=""
   PARSED_PROJECT_NAME=""
 
   while [[ $# -gt 0 ]]; do
@@ -944,8 +948,8 @@ parse_plugin_project_args() {
       shift 2
       ;;
     *)
-      if [[ -z "$PARSED_PLUGIN_NAME" ]]; then
-        PARSED_PLUGIN_NAME="$1"
+      if [[ -z "$PARSED_SERVICE_NAME" ]]; then
+        PARSED_SERVICE_NAME="$1"
         shift
       else
         error "Unexpected argument: $1"
@@ -955,8 +959,8 @@ parse_plugin_project_args() {
     esac
   done
 
-  [[ -n "$PARSED_PLUGIN_NAME" ]] || {
-    error "Missing plugin name"
+  [[ -n "$PARSED_SERVICE_NAME" ]] || {
+    error "Missing service name"
     info "$usage"
     exit 1
   }
@@ -967,7 +971,7 @@ parse_plugin_project_args() {
   }
 }
 
-parse_plugin_scope_args() {
+parse_service_scope_args() {
   local usage="$1"
   local allow_yes="$2"
   shift 2
@@ -1013,43 +1017,43 @@ parse_plugin_scope_args() {
   fi
 }
 
-cmd_plugin_add() {
-  parse_plugin_project_args "Usage: twf plugin add <plugin> --project <project>" "$@"
+cmd_service_add() {
+  parse_service_project_args "Usage: twf service add <service> --project <project>" "$@"
   validate_project_name "$PARSED_PROJECT_NAME"
-  require_plugin "$PARSED_PLUGIN_NAME"
+  require_service "$PARSED_SERVICE_NAME"
 
   local repo
   repo="$(require_workflow_repo)"
   ensure_project_exists "$repo" "$PARSED_PROJECT_NAME"
 
-  add_plugin_to_project_config "$repo" "$PARSED_PROJECT_NAME" "$PARSED_PLUGIN_NAME"
-  ok "Added plugin '$PARSED_PLUGIN_NAME' to project '$PARSED_PROJECT_NAME'"
-  info "Run: twf plugin install --project $PARSED_PROJECT_NAME"
+  add_service_to_project_config "$repo" "$PARSED_PROJECT_NAME" "$PARSED_SERVICE_NAME"
+  ok "Added service '$PARSED_SERVICE_NAME' to project '$PARSED_PROJECT_NAME'"
+  info "Run: twf service install --project $PARSED_PROJECT_NAME"
 }
 
-cmd_plugin_remove() {
-  parse_plugin_project_args "Usage: twf plugin remove <plugin> --project <project>" "$@"
+cmd_service_remove() {
+  parse_service_project_args "Usage: twf service remove <service> --project <project>" "$@"
   validate_project_name "$PARSED_PROJECT_NAME"
 
   local repo
   repo="$(require_workflow_repo)"
   ensure_project_exists "$repo" "$PARSED_PROJECT_NAME"
 
-  remove_plugin_from_project_config "$repo" "$PARSED_PROJECT_NAME" "$PARSED_PLUGIN_NAME"
-  ok "Removed plugin '$PARSED_PLUGIN_NAME' from project '$PARSED_PROJECT_NAME'"
+  remove_service_from_project_config "$repo" "$PARSED_PROJECT_NAME" "$PARSED_SERVICE_NAME"
+  ok "Removed service '$PARSED_SERVICE_NAME' from project '$PARSED_PROJECT_NAME'"
 }
 
-cmd_plugin_list() {
-  parse_plugin_scope_args "Usage: twf plugin list [--project <project> | --global]" false "$@"
+cmd_service_list() {
+  parse_service_scope_args "Usage: twf service list [--project <project> | --global]" false "$@"
 
-  echo "Available plugins:"
+  echo "Available services:"
   local available=()
   local p=""
   while IFS= read -r p; do
     [[ -n "$p" ]] || continue
     available+=("$p")
     echo "  - $p"
-  done < <(list_available_plugins)
+  done < <(list_available_services)
   if [[ ${#available[@]} -eq 0 ]]; then
     echo "  (none)"
   fi
@@ -1065,19 +1069,19 @@ cmd_plugin_list() {
     validate_project_name "$PARSED_PROJECT_NAME"
     ensure_project_exists "$repo" "$PARSED_PROJECT_NAME"
     echo
-    echo "Configured plugins for '$PARSED_PROJECT_NAME':"
+    echo "Configured services for '$PARSED_PROJECT_NAME':"
     local any=false
     while IFS= read -r p; do
       [[ -n "$p" ]] || continue
       any=true
       echo "  - $p"
-    done < <(enabled_plugins_for_project "$repo" "$PARSED_PROJECT_NAME")
+    done < <(enabled_services_for_project "$repo" "$PARSED_PROJECT_NAME")
     [[ "$any" == true ]] || echo "  (none)"
     return 0
   fi
 
   echo
-  echo "Configured plugins by project:"
+  echo "Configured services by project:"
   local proj=""
   while IFS= read -r proj; do
     [[ -n "$proj" ]] || continue
@@ -1087,13 +1091,13 @@ cmd_plugin_list() {
       [[ -n "$p" ]] || continue
       any=true
       echo "    - $p"
-    done < <(enabled_plugins_for_project "$repo" "$proj")
+    done < <(enabled_services_for_project "$repo" "$proj")
     [[ "$any" == true ]] || echo "    (none)"
   done < <(list_projects_in_repo "$repo")
 }
 
-cmd_plugin_install() {
-  parse_plugin_scope_args "Usage: twf plugin install --project <project> [--yes] | --global [--yes]" true "$@"
+cmd_service_install() {
+  parse_service_scope_args "Usage: twf service install --project <project> [--yes] | --global [--yes]" true "$@"
 
   if [[ -z "$PARSED_PROJECT_NAME" && "$PARSED_GLOBAL" != true ]]; then
     error "Missing scope: use --project <name> or --global"
@@ -1105,53 +1109,53 @@ cmd_plugin_install() {
 
   if [[ -n "$PARSED_PROJECT_NAME" ]]; then
     validate_project_name "$PARSED_PROJECT_NAME"
-    run_plugin_install_for_project "$repo" "$PARSED_PROJECT_NAME" "$PARSED_ASSUME_YES"
+    run_service_install_for_project "$repo" "$PARSED_PROJECT_NAME" "$PARSED_ASSUME_YES"
     return 0
   fi
 
   local proj=""
   while IFS= read -r proj; do
     [[ -n "$proj" ]] || continue
-    run_plugin_install_for_project "$repo" "$proj" "$PARSED_ASSUME_YES"
+    run_service_install_for_project "$repo" "$proj" "$PARSED_ASSUME_YES"
   done < <(list_projects_in_repo "$repo")
 }
 
-cmd_plugin_help() {
+cmd_service_help() {
   cat <<'EOF'
-Usage: twf plugin <command> [options]
+Usage: twf service <command> [options]
 
 Commands:
-  add <plugin> --project <project>
-  remove <plugin> --project <project>
+  add <service> --project <project>
+  remove <service> --project <project>
   list [--project <project> | --global]
   install --project <project> [--yes]
   install --global [--yes]
 EOF
 }
 
-cmd_plugin() {
+cmd_service() {
   local subcommand="${1:-}"
   shift || true
 
   case "$subcommand" in
   add)
-    cmd_plugin_add "$@"
+    cmd_service_add "$@"
     ;;
   remove)
-    cmd_plugin_remove "$@"
+    cmd_service_remove "$@"
     ;;
   list)
-    cmd_plugin_list "$@"
+    cmd_service_list "$@"
     ;;
   install)
-    cmd_plugin_install "$@"
+    cmd_service_install "$@"
     ;;
   help | -h | --help | "")
-    cmd_plugin_help
+    cmd_service_help
     ;;
   *)
-    error "Unknown plugin subcommand: $subcommand"
-    info "Run: twf plugin --help"
+    error "Unknown service subcommand: $subcommand"
+    info "Run: twf service --help"
     exit 1
     ;;
   esac
@@ -1229,6 +1233,172 @@ cmd_list() {
   else
     echo "  (tmuxinator dir not found)"
   fi
+}
+
+cmd_status() {
+  local repo
+  repo="$(read_configured_workflow_root)"
+
+  echo "Running project sessions:"
+  if command -v tmux >/dev/null 2>&1; then
+    local sessions
+    sessions="$(tmux ls 2>/dev/null || true)"
+    if [[ -z "$sessions" ]]; then
+      echo "  (none)"
+    else
+      while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        echo "  - ${line%%:*}"
+      done <<<"$sessions"
+    fi
+  else
+    echo "  (tmux not installed)"
+  fi
+
+  if [[ -z "$repo" || ! -d "$repo" ]]; then
+    echo
+    info "No team workflow root configured yet"
+    info "Run: twf add <project-name>"
+    return 0
+  fi
+
+  echo
+  echo "Project service health:"
+  local proj=""
+  local found=false
+  while IFS= read -r proj; do
+    [[ -n "$proj" ]] || continue
+    found=true
+    local running="stopped"
+    if command -v tmux >/dev/null 2>&1 && tmux has-session -t "$proj" 2>/dev/null; then
+      running="running"
+    fi
+    echo "- $proj ($running)"
+
+    local svc=""
+    local any=false
+    while IFS= read -r svc; do
+      [[ -n "$svc" ]] || continue
+      any=true
+      require_service "$svc"
+      build_service_state_context "$repo" "$proj" "$svc"
+      if service_state_matches "$proj" "$svc" "$SERVICE_CTX_VERSION" "$SERVICE_CTX_CONFIG_HASH"; then
+        echo "  - $svc: ready"
+      else
+        echo "  - $svc: needs install"
+      fi
+    done < <(enabled_services_for_project "$repo" "$proj")
+    [[ "$any" == true ]] || echo "  - (no services configured)"
+  done < <(list_projects_in_repo "$repo")
+
+  [[ "$found" == true ]] || echo "  (no projects found)"
+}
+
+cmd_demo() {
+  local target_dir="${1:-$HOME/code/twf-demo}"
+  target_dir="$(expand_path "$target_dir")"
+
+  if [[ -e "$target_dir" ]]; then
+    error "Demo target already exists: $target_dir"
+    info "Pass a custom path: twf demo /path/to/new-folder"
+    exit 1
+  fi
+
+  if ! command -v git >/dev/null 2>&1; then
+    error "git is required for twf demo"
+    exit 1
+  fi
+
+  mkdir -p "$target_dir"
+  info "Creating demo workspace at $target_dir"
+
+  git clone --depth 1 "https://github.com/vercel/next-learn.git" "$target_dir/web" >/dev/null 2>&1 || {
+    error "Failed to clone Next.js demo repository"
+    exit 1
+  }
+
+  mkdir -p "$target_dir/api"
+  cat >"$target_dir/api/package.json" <<'EOF'
+{
+  "name": "twf-demo-api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
+EOF
+  cat >"$target_dir/api/server.js" <<'EOF'
+import express from "express"
+
+const app = express()
+const port = process.env.PORT || 4000
+
+app.get("/health", (_req, res) => {
+  res.json({ status: "ok" })
+})
+
+app.listen(port, () => {
+  console.log(`Demo API listening on http://localhost:${port}`)
+})
+EOF
+
+  local old_pwd
+  old_pwd="$PWD"
+  cd "$target_dir"
+  cmd_add twf-demo
+  local workflow_repo
+  workflow_repo="$(require_workflow_repo)"
+  local demo_project_file
+  demo_project_file="$(project_template_file "$workflow_repo" "twf-demo")"
+  local demo_override_file
+  demo_override_file="$(project_override_file "$workflow_repo" "twf-demo")"
+
+  cat >"$demo_project_file" <<EOF
+name: twf-demo
+root: "$target_dir"
+
+startup_window: web
+
+windows:
+  - web:
+      root: ./web
+      layout: main-vertical
+      panes:
+        - editor: 'nvim'
+        - server: 'npm run dev || zsh -l'
+
+  - api:
+      root: ./api
+      layout: main-vertical
+      panes:
+        - editor: 'nvim'
+        - server: 'npm install && npm run dev || zsh -l'
+
+  - twf:
+      root: ./.twf
+      panes:
+        - 'nvim || zsh -l'
+EOF
+
+  cat >"$demo_override_file" <<'EOF'
+services:
+  enabled:
+    - web
+    - api
+  config: {}
+EOF
+
+  cd "$old_pwd"
+
+  ok "Demo project created"
+  info "Try it now:"
+  echo "  cd \"$target_dir\""
+  echo "  twf service install --project twf-demo"
+  echo "  twf start twf-demo"
 }
 
 workflow_repo_from_alias() {
@@ -1309,7 +1479,7 @@ override_file = ARGV[1]
 
 project_data = load_yaml_with_erb(project_file)
 override_data = File.exist?(override_file) ? load_yaml_with_erb(override_file) : {}
-override_data.delete("plugins")
+override_data.delete("services")
 
 merged = deep_merge_hash(project_data, override_data)
 puts merged.to_yaml(line_width: -1)
@@ -1438,7 +1608,7 @@ cmd_start() {
   fi
 
   if [[ "$has_managed_project" == true ]]; then
-    check_plugins_ready_for_project "$workflow_repo" "$project_name"
+    check_services_ready_for_project "$workflow_repo" "$project_name"
   fi
 
   if [[ "$has_managed_project" == true ]]; then
@@ -1607,8 +1777,14 @@ main() {
   remove)
     cmd_remove "$@"
     ;;
-  plugin)
-    cmd_plugin "$@"
+  service)
+    cmd_service "$@"
+    ;;
+  demo)
+    cmd_demo "$@"
+    ;;
+  status)
+    cmd_status "$@"
     ;;
   validate)
     cmd_validate "$@"

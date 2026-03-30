@@ -16,9 +16,6 @@ pre_window: >-
   if command -v nvm >/dev/null 2>&1; then nvm use || true;
   else echo "nvm not found, continuing without it"; fi'
 
-on_project_start: >-
-  bash -lc 'echo "Tracing is manual. Run npm run jaeger:start when needed."'
-
 windows:
   - frontend:
       root: ./landing-frontend
