@@ -46,19 +46,19 @@ Commands:
   help                         Show this help
 
 Examples:
-  twf add landing-site
-  twf add landing-site --dry-run
+  twf add my-project
+  twf add my-project --dry-run
   twf add
-  twf remove landing-site
-  twf service add node --project landing-site
-  twf service install --project landing-site
+  twf remove my-project
+  twf service add node --project my-project
+  twf service install --project my-project
   twf demo
   twf status
   twf validate
   twf doctor
   twf update
-  twf start landing-site
-  twf stop landing-site
+  twf start my-project
+  twf stop my-project
 EOF
 }
 

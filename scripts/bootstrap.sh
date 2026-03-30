@@ -249,6 +249,6 @@ echo
 info "Next steps:"
 echo "  exec \"\$SHELL\" -l"
 echo "  mkdir -p \"$HOME/code/team-workflows\" && cd \"$HOME/code/team-workflows\""
-echo "  twf add my-workflow"
+echo "  twf add my-project"
 echo "  twf validate"
-echo "  twf start my-workflow"
+echo "  twf start my-project"
