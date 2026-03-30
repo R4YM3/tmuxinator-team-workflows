@@ -2075,13 +2075,17 @@ cmd_start() {
     set +e
     (
       cd "$workflow_repo"
-      tmuxinator start -p "$rendered_config_file" "${start_args[@]}"
+      if [[ ${#start_args[@]} -gt 0 ]]; then
+        tmuxinator start -p "$rendered_config_file" "${start_args[@]}"
+      else
+        tmuxinator start -p "$rendered_config_file"
+      fi
     )
     tmuxinator_status=$?
     set -e
     rm -f "$rendered_config_file"
     if [[ "$tmuxinator_status" -ne 0 ]] && [[ "$had_session_before" == false ]] && tmux has-session -t "$project_name" 2>/dev/null; then
-      if start_requested_no_attach "${start_args[@]}"; then
+      if [[ ${#start_args[@]} -gt 0 ]] && start_requested_no_attach "${start_args[@]}"; then
         return 0
       fi
       warn "Workflow session '$project_name' started, but auto-attach failed"
@@ -2097,11 +2101,15 @@ cmd_start() {
   sanitize_tmux_env
   echo "[twf] Starting workflow..."
   set +e
-  tmuxinator start "$project_name" "${start_args[@]}"
+  if [[ ${#start_args[@]} -gt 0 ]]; then
+    tmuxinator start "$project_name" "${start_args[@]}"
+  else
+    tmuxinator start "$project_name"
+  fi
   tmuxinator_status=$?
   set -e
   if [[ "$tmuxinator_status" -ne 0 ]] && [[ "$had_session_before" == false ]] && tmux has-session -t "$project_name" 2>/dev/null; then
-    if start_requested_no_attach "${start_args[@]}"; then
+    if [[ ${#start_args[@]} -gt 0 ]] && start_requested_no_attach "${start_args[@]}"; then
       return 0
     fi
     warn "Workflow session '$project_name' started, but auto-attach failed"
