@@ -351,15 +351,6 @@ PY
     fi
   fi
 
-  local cwd_name
-  cwd_name="$(basename "$PWD")"
-  local alias_repo
-  alias_repo="$(workflow_repo_from_alias "$cwd_name")"
-  if [[ -n "$alias_repo" && -d "$alias_repo" ]]; then
-    echo "$alias_repo"
-    return 0
-  fi
-
   echo ""
 }
 
@@ -2145,34 +2136,6 @@ EOF
   echo "  twf start twf-demo"
 }
 
-workflow_repo_from_alias() {
-  local project_name="$1"
-  local alias_file="$TMUXINATOR_DIR/$project_name.yml"
-
-  [[ -L "$alias_file" ]] || {
-    echo ""
-    return 0
-  }
-
-  local target
-  target="$(readlink "$alias_file")"
-  if [[ "$target" != /* ]]; then
-    target="$(cd "$(dirname "$alias_file")" && pwd)/$target"
-  fi
-
-  local expected_suffix_new="/$project_name/project.yml"
-  if [[ "$target" == *"$expected_suffix_new" ]]; then
-    local repo
-    repo="${target%$expected_suffix_new}"
-    if is_workflow_repo "$repo"; then
-      echo "$repo"
-      return 0
-    fi
-  fi
-
-  echo ""
-}
-
 sanitize_tmux_env() {
   if [[ -n "${TMUX:-}" ]]; then
     if ! tmux display-message -p '#{client_tty}' >/dev/null 2>&1; then
@@ -2291,11 +2254,6 @@ infer_start_project_from_context() {
   local cwd_name
   cwd_name="$(basename "$PWD")"
 
-  if [[ -e "$TMUXINATOR_DIR/$cwd_name.yml" ]]; then
-    echo "$cwd_name"
-    return 0
-  fi
-
   local repo
   repo="$(read_configured_workflow_root)"
   if [[ -z "$repo" ]]; then
@@ -2364,15 +2322,12 @@ cmd_start() {
     esac
   done
 
-  local alias_file="$TMUXINATOR_DIR/$project_name.yml"
-  local current_repo=""
   local workflow_repo=""
   local config_source_file=""
   local config_override_file=""
   local rendered_config_file=""
   local tmuxinator_status=0
   local had_session_before=false
-  local has_managed_project=false
 
   echo "[twf] Project: $project_name"
 
@@ -2385,116 +2340,68 @@ cmd_start() {
     exit 1
   fi
 
-  if [[ ! -e "$alias_file" ]]; then
-    workflow_repo="$(require_workflow_repo)"
-    if [[ -n "$workflow_repo" ]]; then
-      config_source_file="$(project_template_file "$workflow_repo" "$project_name")"
-      if [[ -f "$config_source_file" ]]; then
-        error "Missing tmuxinator alias for '$project_name': $alias_file"
-        info "Project template exists locally: $config_source_file"
-        info "Relink manually with:"
-        printf '  ln -s "%s" "%s"\n' "$config_source_file" "$alias_file"
-        exit 1
-      fi
-    fi
+  workflow_repo="$(detect_workflow_repo)"
+  if [[ -z "$workflow_repo" ]]; then
+    error "No team workflow root is configured"
+    info "Run: twf add $project_name"
+    exit 1
+  fi
 
-    error "Project alias not found: $alias_file"
+  config_source_file="$(project_template_file "$workflow_repo" "$project_name")"
+  if [[ ! -f "$config_source_file" ]]; then
+    error "Project template not found for '$project_name': $config_source_file"
     info "Add the project first with: twf add $project_name"
     exit 1
   fi
 
-  if [[ ! -L "$alias_file" && ! -f "$alias_file" ]]; then
-    error "Project alias path is not a file: $alias_file"
-    exit 1
-  fi
+  echo "[twf] Loading services..."
+  echo "[twf] Applying developer overrides..."
+  echo "[twf] Checking dependencies..."
+  report_service_readiness_for_start "$workflow_repo" "$project_name"
 
-  current_repo="$(read_configured_workflow_root)"
-  if [[ -n "$current_repo" && -f "$(project_template_file "$current_repo" "$project_name")" ]]; then
-    workflow_repo="$current_repo"
-  else
-    workflow_repo="$(workflow_repo_from_alias "$project_name")"
-  fi
-
-  if [[ -n "$workflow_repo" && -f "$(project_template_file "$workflow_repo" "$project_name")" ]]; then
-    has_managed_project=true
-  fi
-
-  if [[ "$has_managed_project" == true ]]; then
-    echo "[twf] Loading services..."
-    echo "[twf] Applying developer overrides..."
-    echo "[twf] Checking dependencies..."
-    report_service_readiness_for_start "$workflow_repo" "$project_name"
-
-    if [[ ${#START_MISSING_SERVICES[@]} -gt 0 || ${#START_TIMEOUT_SERVICES[@]} -gt 0 || ${#START_FAILED_SERVICES[@]} -gt 0 ]]; then
-      echo
-      if [[ ${#START_MISSING_SERVICES[@]} -gt 0 ]]; then
-        echo "[twf] Run: twf service install --project $project_name"
-      fi
-      if [[ ${#START_TIMEOUT_SERVICES[@]} -gt 0 || ${#START_FAILED_SERVICES[@]} -gt 0 ]]; then
-        echo "[twf] Run: twf doctor --project $project_name"
-      fi
-      if [[ "$strict_mode" == true ]]; then
-        error "Missing required services for '$project_name' (strict mode enabled)"
-        return 1
-      fi
+  if [[ ${#START_MISSING_SERVICES[@]} -gt 0 || ${#START_TIMEOUT_SERVICES[@]} -gt 0 || ${#START_FAILED_SERVICES[@]} -gt 0 ]]; then
+    echo
+    if [[ ${#START_MISSING_SERVICES[@]} -gt 0 ]]; then
+      echo "[twf] Run: twf service install --project $project_name"
     fi
-  fi
-
-  if [[ "$has_managed_project" == true ]]; then
-    config_source_file="$(project_template_file "$workflow_repo" "$project_name")"
-    config_override_file="$(project_override_file "$workflow_repo" "$project_name")"
-    rendered_config_file="$(mktemp "${TMPDIR:-/tmp}/twf-${project_name}-XXXXXX")"
-
-    if ! render_project_config_for_start "$config_source_file" "$config_override_file" "$rendered_config_file"; then
-      rm -f "$rendered_config_file"
-      error "Failed to render workflow template for '$project_name'"
+    if [[ ${#START_TIMEOUT_SERVICES[@]} -gt 0 || ${#START_FAILED_SERVICES[@]} -gt 0 ]]; then
+      echo "[twf] Run: twf doctor --project $project_name"
+    fi
+    if [[ "$strict_mode" == true ]]; then
+      error "Missing required services for '$project_name' (strict mode enabled)"
       return 1
     fi
+  fi
 
-    local rendered_root
-    rendered_root="$(read_rendered_config_root "$rendered_config_file")"
-    if [[ -n "$rendered_root" && -d "$rendered_root" ]]; then
-      ensure_local_workflow_link "$project_name" "$(project_dir "$workflow_repo" "$project_name")" "$rendered_root"
-    fi
+  config_override_file="$(project_override_file "$workflow_repo" "$project_name")"
+  rendered_config_file="$(mktemp "${TMPDIR:-/tmp}/twf-${project_name}-XXXXXX")"
 
-    sanitize_tmux_env
-    echo "[twf] Starting workflow..."
-    set +e
-    (
-      cd "$workflow_repo"
-      if [[ ${#start_args[@]} -gt 0 ]]; then
-        tmuxinator start -p "$rendered_config_file" "${start_args[@]}"
-      else
-        tmuxinator start -p "$rendered_config_file"
-      fi
-    )
-    tmuxinator_status=$?
-    set -e
+  if ! render_project_config_for_start "$config_source_file" "$config_override_file" "$rendered_config_file"; then
     rm -f "$rendered_config_file"
-    if [[ "$tmuxinator_status" -ne 0 ]] && [[ "$had_session_before" == false ]] && tmux has-session -t "$project_name" 2>/dev/null; then
-      if [[ ${#start_args[@]} -gt 0 ]] && start_requested_no_attach "${start_args[@]}"; then
-        return 0
-      fi
-      warn "Workflow session '$project_name' started, but auto-attach failed"
-      info "Attach manually: tmux attach-session -t $project_name"
-      return 0
-    fi
-    if [[ "$tmuxinator_status" -eq 0 ]]; then
-      echo "✔ Session started"
-    fi
-    return "$tmuxinator_status"
+    error "Failed to render workflow template for '$project_name'"
+    return 1
+  fi
+
+  local rendered_root
+  rendered_root="$(read_rendered_config_root "$rendered_config_file")"
+  if [[ -n "$rendered_root" && -d "$rendered_root" ]]; then
+    ensure_local_workflow_link "$project_name" "$(project_dir "$workflow_repo" "$project_name")" "$rendered_root"
   fi
 
   sanitize_tmux_env
   echo "[twf] Starting workflow..."
   set +e
-  if [[ ${#start_args[@]} -gt 0 ]]; then
-    tmuxinator start "$project_name" "${start_args[@]}"
-  else
-    tmuxinator start "$project_name"
-  fi
+  (
+    cd "$workflow_repo"
+    if [[ ${#start_args[@]} -gt 0 ]]; then
+      tmuxinator start -p "$rendered_config_file" "${start_args[@]}"
+    else
+      tmuxinator start -p "$rendered_config_file"
+    fi
+  )
   tmuxinator_status=$?
   set -e
+  rm -f "$rendered_config_file"
   if [[ "$tmuxinator_status" -ne 0 ]] && [[ "$had_session_before" == false ]] && tmux has-session -t "$project_name" 2>/dev/null; then
     if [[ ${#start_args[@]} -gt 0 ]] && start_requested_no_attach "${start_args[@]}"; then
       return 0

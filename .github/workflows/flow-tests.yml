@@ -6,8 +6,29 @@ on:
     branches: [main]
 
 jobs:
+  changes:
+    name: flow-changes
+    runs-on: ubuntu-latest
+    outputs:
+      run_flow: ${{ steps.filter.outputs.flow }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            flow:
+              - 'twf'
+              - 'scripts/**'
+              - 'examples/**'
+              - 'tests/flows/**'
+              - 'tests/helpers/**'
+              - 'tests/scripts/test-flow'
+
   flow:
     name: flow-tests-${{ matrix.os }}
+    needs: changes
+    if: ${{ github.event_name == 'push' || needs.changes.outputs.run_flow == 'true' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

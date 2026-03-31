@@ -6,8 +6,27 @@ on:
     branches: [main]
 
 jobs:
+  changes:
+    name: docker-changes
+    runs-on: ubuntu-latest
+    outputs:
+      run_docker: ${{ steps.filter.outputs.docker }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            docker:
+              - 'twf'
+              - 'tests/integration/docker/**'
+              - 'tests/helpers/common.bash'
+              - 'tests/scripts/test-docker'
+
   docker:
     name: docker-integration-linux
+    needs: changes
+    if: ${{ github.event_name == 'push' || needs.changes.outputs.run_docker == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

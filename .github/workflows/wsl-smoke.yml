@@ -6,38 +6,63 @@ on:
     branches: [main]
 
 jobs:
+  changes:
+    name: wsl-changes
+    runs-on: ubuntu-latest
+    outputs:
+      run_wsl: ${{ steps.filter.outputs.wsl }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            wsl:
+              - 'twf'
+              - 'scripts/**'
+              - '.github/workflows/wsl-smoke.yml'
+
   wsl:
     name: wsl-smoke
+    needs: changes
+    if: ${{ github.event_name == 'push' || needs.changes.outputs.run_wsl == 'true' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Provision WSL distro
+      - name: Resolve WSL distro
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $DistroName = "twf-ci"
-          $RunnerTemp = $env:RUNNER_TEMP
-          $RootFs = Join-Path $RunnerTemp "ubuntu-noble-wsl.rootfs.tar.gz"
-          $InstallPath = Join-Path $RunnerTemp "wsl\$DistroName"
-
-          $distrosRaw = wsl.exe --list --quiet 2>$null
-          $distros = @()
-          if ($distrosRaw) {
-            $distros = $distrosRaw -replace "`0", "" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
+          function Get-Distros {
+            $raw = wsl.exe --list --quiet 2>$null
+            if (-not $raw) { return @() }
+            return $raw -replace "`0", "" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
           }
 
-          if (-not ($distros -contains $DistroName)) {
-            New-Item -ItemType Directory -Force -Path $InstallPath | Out-Null
-            Invoke-WebRequest -Uri "https://cloud-images.ubuntu.com/wsl/noble/current/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz" -OutFile $RootFs
-            wsl.exe --import $DistroName $InstallPath $RootFs --version 2
+          $distros = Get-Distros
+          if (-not $distros -or $distros.Count -eq 0) {
+            wsl.exe --install --distribution Ubuntu --no-launch
+            $distros = Get-Distros
           }
+
+          if (-not $distros -or $distros.Count -eq 0) {
+            throw "Unable to find or install a WSL distro on this runner."
+          }
+
+          if ($distros -contains "Ubuntu") {
+            $DistroName = "Ubuntu"
+          } else {
+            $DistroName = $distros[0]
+          }
+
+          "TWF_WSL_DISTRO=$DistroName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: WSL smoke checks
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $DistroName = "twf-ci"
+          $DistroName = $env:TWF_WSL_DISTRO
           $workspace = $env:GITHUB_WORKSPACE
           $workspaceWsl = wsl.exe -d $DistroName -- wslpath -a "$workspace"
           $workspaceWsl = $workspaceWsl.Trim()

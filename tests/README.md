@@ -10,6 +10,7 @@ tests/scripts/test-flow
 tests/scripts/test-services
 tests/scripts/test-docker
 tests/scripts/test-all
+tests/scripts/test-changed
 ```
 
 ## Structure

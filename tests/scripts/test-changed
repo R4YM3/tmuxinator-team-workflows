@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+DEFAULT_BASE="origin/main"
+BASE_REF="${1:-$DEFAULT_BASE}"
+
+cd "$ROOT_DIR"
+
+resolve_base_ref() {
+  local ref="$1"
+  if git rev-parse --verify "$ref" >/dev/null 2>&1; then
+    echo "$ref"
+    return 0
+  fi
+
+  if [[ "$ref" == "$DEFAULT_BASE" ]] && git rev-parse --verify main >/dev/null 2>&1; then
+    echo "main"
+    return 0
+  fi
+
+  echo ""
+}
+
+selected_base="$(resolve_base_ref "$BASE_REF")"
+if [[ -z "$selected_base" ]]; then
+  echo "[warn] Could not resolve base ref '$BASE_REF'. Running full suite."
+  tests/scripts/test-all
+  exit 0
+fi
+
+merge_base="$(git merge-base HEAD "$selected_base" 2>/dev/null || true)"
+if [[ -z "$merge_base" ]]; then
+  echo "[warn] Could not determine merge-base with '$selected_base'. Running full suite."
+  tests/scripts/test-all
+  exit 0
+fi
+
+changed_files="$(
+  {
+    git diff --name-only "$merge_base"...HEAD
+    git diff --name-only
+    git diff --name-only --cached
+  } | awk 'NF' | sort -u
+)"
+if [[ -z "$changed_files" ]]; then
+  echo "[info] No changes since $selected_base (merge-base $merge_base). Nothing to run."
+  exit 0
+fi
+
+run_flow=false
+run_services=false
+run_docker=false
+
+while IFS= read -r path; do
+  [[ -n "$path" ]] || continue
+  case "$path" in
+  twf | scripts/* | examples/* | tests/flows/* | tests/helpers/* | tests/scripts/test-flow)
+    run_flow=true
+    ;;
+  esac
+
+  case "$path" in
+  twf | services/* | tests/services/* | tests/helpers/service_contract.bash | tests/scripts/test-services)
+    run_services=true
+    ;;
+  esac
+
+  case "$path" in
+  twf | tests/integration/docker/* | tests/helpers/common.bash | tests/scripts/test-docker)
+    run_docker=true
+    ;;
+  esac
+done <<<"$changed_files"
+
+if [[ "$run_flow" == false && "$run_services" == false && "$run_docker" == false ]]; then
+  echo "[info] No test suites matched changed files."
+  exit 0
+fi
+
+if [[ "$run_flow" == true || "$run_services" == true || "$run_docker" == true ]]; then
+  if ! command -v bats >/dev/null 2>&1; then
+    echo "[error] bats is required. Install bats-core to run tests." >&2
+    exit 1
+  fi
+fi
+
+if [[ "$run_flow" == true ]]; then
+  echo "[run] tests/scripts/test-flow"
+  tests/scripts/test-flow
+fi
+
+if [[ "$run_services" == true ]]; then
+  echo "[run] tests/scripts/test-services"
+  tests/scripts/test-services
+fi
+
+if [[ "$run_docker" == true ]]; then
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "[error] docker is required for docker integration tests." >&2
+    exit 1
+  fi
+
+  if ! docker info >/dev/null 2>&1; then
+    echo "[error] docker daemon is not available. Start Docker/Colima and retry." >&2
+    exit 1
+  fi
+
+  echo "[run] tests/scripts/test-docker"
+  tests/scripts/test-docker
+fi

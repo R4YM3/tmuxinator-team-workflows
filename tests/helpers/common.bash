@@ -2,7 +2,7 @@
 
 setup_test_env() {
   export REPO_ROOT
-  REPO_ROOT="$(git rev-parse --show-toplevel)"
+  REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
   export TWF_BIN="$REPO_ROOT/twf"
 
   export TEST_ROOT="$BATS_TEST_TMPDIR/work"

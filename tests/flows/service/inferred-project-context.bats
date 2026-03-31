@@ -21,6 +21,6 @@ setup() {
   [ "$status" -eq 0 ]
   assert_output_contains "inferred 'service-project'"
 
-  run grep -q "- redis" "$TEAM_ROOT/service-project/developer.yml"
+  run grep -q -- "- redis" "$TEAM_ROOT/service-project/developer.yml"
   [ "$status" -eq 0 ]
 }

@@ -6,8 +6,28 @@ on:
     branches: [main]
 
 jobs:
+  changes:
+    name: service-contract-changes
+    runs-on: ubuntu-latest
+    outputs:
+      run_services: ${{ steps.filter.outputs.services }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            services:
+              - 'twf'
+              - 'services/**'
+              - 'tests/services/**'
+              - 'tests/helpers/service_contract.bash'
+              - 'tests/scripts/test-services'
+
   services:
     name: service-contract-tests-${{ matrix.os }}
+    needs: changes
+    if: ${{ github.event_name == 'push' || needs.changes.outputs.run_services == 'true' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
