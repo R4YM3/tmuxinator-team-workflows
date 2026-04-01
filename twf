@@ -18,6 +18,14 @@ SERVICES_DIR="$RUNTIME_DIR/services"
 SERVICE_STATE_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/twf/state/services"
 SERVICE_CHECK_TIMEOUT_SEC="${TWF_SERVICE_CHECK_TIMEOUT_SEC:-1.5}"
 
+START_MISSING_SERVICES=()
+START_TIMEOUT_SERVICES=()
+START_FAILED_SERVICES=()
+INSTALL_CANDIDATES=()
+CHECKBOX_SELECTED=()
+PROJECT_DEP_COMMANDS=()
+PROJECT_DEP_LABELS=()
+
 ok() { printf "\033[1;32m[ok]\033[0m %s\n" "$1"; }
 info() { printf "\033[1;34m[info]\033[0m %s\n" "$1"; }
 warn() { printf "\033[1;33m[warn]\033[0m %s\n" "$1"; }
@@ -37,6 +45,8 @@ Commands:
   status                       Show running projects and service health
   validate                     Validate workflow files
   doctor                       Run environment diagnostics
+  install [--project <name>] [--yes]
+                               Install machine readiness and project dependencies
   update                       Pull latest twf runtime repo
   list                         List projects and installed aliases
   start <project> [args...]    Start a project workflow (supports --strict)
@@ -57,6 +67,8 @@ Examples:
   twf status
   twf validate
   twf doctor
+  twf install
+  twf install --yes
   twf update
   twf start my-project
   twf stop my-project
@@ -75,6 +87,7 @@ Common commands:
   twf stop [project]              Stop workflow
   twf status                      Show running workflows and health
   twf doctor                      Diagnose issues and show fixes
+  twf install                     Install environment setup for project
 
 Help:
   twf help                        Show this quick help
@@ -85,13 +98,14 @@ Examples:
   twf add
   twf service add web
   twf service install
+  twf install
   twf start
 EOF
 }
 
 closest_command() {
   local needle="$1"
-  local commands=(add remove service demo status validate doctor update list start stop uninstall version help)
+  local commands=(add remove service demo status validate doctor install update list start stop uninstall version help)
 
   if command -v python3 >/dev/null 2>&1; then
     python3 - "$needle" "${commands[@]}" <<'PY'
@@ -137,7 +151,7 @@ cmd_help() {
   --all)
     usage
     ;;
-  add | remove | service | doctor | uninstall)
+  add | remove | service | doctor | install | uninstall)
     "$0" "$topic" --help
     ;;
   start)
@@ -189,6 +203,14 @@ EOF
 Usage: twf update
 
 Pulls latest twf runtime and refreshes the twf CLI symlink.
+EOF
+    ;;
+  install)
+    cat <<'EOF'
+Usage: twf install [--project <project>] [--yes]
+
+Installs machine readiness requirements and project dependencies.
+If no project is provided, twf tries to infer it from current context.
 EOF
     ;;
   version)
@@ -754,6 +776,114 @@ confirm_remove() {
   [[ "${response:-N}" =~ ^[Yy]$ ]]
 }
 
+confirm_default_yes() {
+  local prompt="$1"
+  local response=""
+  read -r -p "$prompt [Y/n]: " response
+  [[ -z "$response" || "$response" =~ ^[Yy]$ ]]
+}
+
+is_interactive_terminal() {
+  [[ -t 0 && -t 1 ]]
+}
+
+select_requirements_with_checkboxes() {
+  local options=("$@")
+  local count=${#options[@]}
+
+  CHECKBOX_SELECTED=()
+  if [[ "$count" -eq 0 ]]; then
+    return 0
+  fi
+
+  local selected=()
+  local i=0
+  for ((i = 0; i < count; i++)); do
+    selected+=(1)
+  done
+
+  local cursor=0
+  local key=""
+
+  while true; do
+    printf '\033[H\033[J'
+    echo "Select requirements to install"
+    echo "Space: toggle  Enter: confirm  A: toggle all  Q: cancel"
+    echo
+
+    local selected_count=0
+    for ((i = 0; i < count; i++)); do
+      local marker="[ ]"
+      if [[ "${selected[$i]}" -eq 1 ]]; then
+        marker="[x]"
+        selected_count=$((selected_count + 1))
+      fi
+
+      if [[ "$i" -eq "$cursor" ]]; then
+        printf '\033[1;36m> %s %s\033[0m\n' "$marker" "${options[$i]}"
+      elif [[ "${selected[$i]}" -eq 1 ]]; then
+        printf '\033[1;32m  %s %s\033[0m\n' "$marker" "${options[$i]}"
+      else
+        printf '  %s %s\n' "$marker" "${options[$i]}"
+      fi
+    done
+
+    echo
+    echo "Selected: $selected_count of $count"
+
+    IFS= read -rsn1 key || true
+    if [[ "$key" == $'\x1b' ]]; then
+      local rest=""
+      IFS= read -rsn2 rest || true
+      key+="$rest"
+    fi
+
+    case "$key" in
+    "")
+      CHECKBOX_SELECTED=()
+      for ((i = 0; i < count; i++)); do
+        if [[ "${selected[$i]}" -eq 1 ]]; then
+          CHECKBOX_SELECTED+=("${options[$i]}")
+        fi
+      done
+      return 0
+      ;;
+    " ")
+      if [[ "${selected[$cursor]}" -eq 1 ]]; then
+        selected[$cursor]=0
+      else
+        selected[$cursor]=1
+      fi
+      ;;
+    q | Q)
+      return 1
+      ;;
+    a | A)
+      local all_selected=true
+      for ((i = 0; i < count; i++)); do
+        if [[ "${selected[$i]}" -eq 0 ]]; then
+          all_selected=false
+          break
+        fi
+      done
+      for ((i = 0; i < count; i++)); do
+        if [[ "$all_selected" == true ]]; then
+          selected[$i]=0
+        else
+          selected[$i]=1
+        fi
+      done
+      ;;
+    j | $'\x1b[B')
+      cursor=$(((cursor + 1) % count))
+      ;;
+    k | $'\x1b[A')
+      cursor=$(((cursor - 1 + count) % count))
+      ;;
+    esac
+  done
+}
+
 render_project_template() {
   local project_name="$1"
   local source_root="$2"
@@ -1268,7 +1398,17 @@ EOF
   info "Next steps:"
   echo "  twf validate"
   echo "  twf doctor"
+  echo "  twf install --project $final_name"
   echo "  twf start $final_name"
+
+  if is_interactive_terminal; then
+    if confirm_default_yes "Run environment setup now?"; then
+      cmd_install --project "$final_name"
+    else
+      info "Skipped environment setup"
+      info "Run: twf install --project $final_name"
+    fi
+  fi
 }
 
 cmd_remove() {
@@ -1456,6 +1596,143 @@ report_service_readiness_for_start() {
       START_MISSING_SERVICES+=("$service")
     fi
   done
+}
+
+collect_install_candidates_for_project() {
+  INSTALL_CANDIDATES=()
+  local seen=","
+  local service=""
+
+  for service in "${START_MISSING_SERVICES[@]-}" "${START_TIMEOUT_SERVICES[@]-}" "${START_FAILED_SERVICES[@]-}"; do
+    [[ -n "$service" ]] || continue
+    if [[ "$seen" != *",$service,"* ]]; then
+      INSTALL_CANDIDATES+=("$service")
+      seen+="$service,"
+    fi
+  done
+}
+
+install_selected_services_for_project() {
+  local repo="$1"
+  local project_name="$2"
+  local assume_yes="$3"
+  shift 3
+
+  local selected_services=("$@")
+  local service=""
+  local failures=()
+
+  if [[ ${#selected_services[@]} -eq 0 ]]; then
+    warn "No machine requirements were selected for installation"
+    return 0
+  fi
+
+  local idx=0
+  local total=${#selected_services[@]}
+  for service in "${selected_services[@]}"; do
+    idx=$((idx + 1))
+    require_service "$service"
+    build_service_state_context "$repo" "$project_name" "$service"
+
+    echo "[install] ($idx/$total) $service"
+    if ! TWF_SERVICE_CONFIG_JSON="$SERVICE_CTX_CONFIG_JSON" TWF_SERVICE_ASSUME_YES="$assume_yes" bash "$SERVICE_CTX_SCRIPT" install; then
+      error "INSTALL-101 Failed to install machine requirement: $service"
+      failures+=("$service")
+      continue
+    fi
+
+    if ! TWF_SERVICE_CONFIG_JSON="$SERVICE_CTX_CONFIG_JSON" bash "$SERVICE_CTX_SCRIPT" check; then
+      error "INSTALL-102 Requirement check failed after install: $service"
+      failures+=("$service")
+      continue
+    fi
+
+    write_service_state "$project_name" "$service" "$SERVICE_CTX_VERSION" "$SERVICE_CTX_CONFIG_HASH"
+    ok "Requirement ready: $service"
+  done
+
+  if [[ ${#failures[@]} -gt 0 ]]; then
+    warn "Machine readiness incomplete. Failed requirements: ${failures[*]}"
+    return 1
+  fi
+
+  return 0
+}
+
+project_root_for_project() {
+  local repo="$1"
+  local project_name="$2"
+  local config_source_file
+  local config_override_file
+  local rendered_config_file
+
+  config_source_file="$(project_template_file "$repo" "$project_name")"
+  config_override_file="$(project_override_file "$repo" "$project_name")"
+  rendered_config_file="$(mktemp "${TMPDIR:-/tmp}/twf-install-${project_name}-XXXXXX")"
+
+  if ! render_project_config_for_start "$config_source_file" "$config_override_file" "$rendered_config_file"; then
+    rm -f "$rendered_config_file"
+    echo ""
+    return 1
+  fi
+
+  local root
+  root="$(read_rendered_config_root "$rendered_config_file")"
+  rm -f "$rendered_config_file"
+  echo "$root"
+}
+
+collect_project_dependency_commands() {
+  local project_root="$1"
+  PROJECT_DEP_COMMANDS=()
+  PROJECT_DEP_LABELS=()
+
+  if [[ -f "$project_root/package.json" ]]; then
+    PROJECT_DEP_COMMANDS+=("npm install")
+    PROJECT_DEP_LABELS+=("npm install")
+  fi
+
+  if [[ -f "$project_root/requirements.txt" ]]; then
+    PROJECT_DEP_COMMANDS+=("pip3 install -r requirements.txt")
+    PROJECT_DEP_LABELS+=("pip3 install -r requirements.txt")
+  fi
+
+  if [[ -f "$project_root/Gemfile" ]]; then
+    PROJECT_DEP_COMMANDS+=("bundle install")
+    PROJECT_DEP_LABELS+=("bundle install")
+  fi
+
+  if [[ -f "$project_root/go.mod" ]]; then
+    PROJECT_DEP_COMMANDS+=("go mod download")
+    PROJECT_DEP_LABELS+=("go mod download")
+  fi
+}
+
+run_project_dependency_commands() {
+  local project_root="$1"
+  local idx=0
+  local total=${#PROJECT_DEP_COMMANDS[@]}
+
+  if [[ "$total" -eq 0 ]]; then
+    info "No project dependency installers detected"
+    return 0
+  fi
+
+  echo "[install] Running project dependency installers"
+  local command=""
+  local label=""
+  for ((idx = 0; idx < total; idx++)); do
+    command="${PROJECT_DEP_COMMANDS[$idx]}"
+    label="${PROJECT_DEP_LABELS[$idx]}"
+    echo "[install] ($((idx + 1))/$total) $label"
+    if ! (cd "$project_root" && eval "$command"); then
+      error "INSTALL-201 Project dependency install failed: $label"
+      return 1
+    fi
+  done
+
+  ok "Project dependencies installed"
+  return 0
 }
 
 parse_service_project_args() {
@@ -1897,6 +2174,127 @@ EOF
     done
     ok "Doctor fix run completed"
   fi
+}
+
+cmd_install() {
+  local project_name=""
+  local assume_yes=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+    --project)
+      [[ $# -ge 2 ]] || {
+        error "--project requires a project name"
+        exit 1
+      }
+      project_name="$2"
+      shift 2
+      ;;
+    --yes)
+      assume_yes=true
+      shift
+      ;;
+    -h | --help)
+      cat <<'EOF'
+Usage: twf install [--project <project>] [--yes]
+
+Installs machine readiness requirements and project dependencies.
+EOF
+      return 0
+      ;;
+    *)
+      error "Unexpected argument: $1"
+      info "Usage: twf install [--project <project>] [--yes]"
+      exit 1
+      ;;
+    esac
+  done
+
+  if [[ -z "$project_name" ]]; then
+    project_name="$(infer_start_project_from_context)"
+    if [[ -n "$project_name" ]]; then
+      info "No --project provided; inferred '$project_name'"
+    fi
+  fi
+
+  if [[ -z "$project_name" ]]; then
+    error "Missing project name"
+    info "Usage: twf install [--project <project>] [--yes]"
+    info "Tip: run from a linked project repo or pass --project <name>"
+    exit 1
+  fi
+
+  validate_project_name "$project_name"
+
+  local workflow_repo
+  workflow_repo="$(require_workflow_repo)"
+  ensure_project_exists "$workflow_repo" "$project_name"
+
+  echo "[plan] Install scope: machine readiness + project dependencies"
+  report_service_readiness_for_start "$workflow_repo" "$project_name"
+  collect_install_candidates_for_project
+
+  local selected_services=()
+  if [[ ${#INSTALL_CANDIDATES[@]} -eq 0 ]]; then
+    ok "Machine readiness already satisfied"
+  else
+    echo "[check] Missing machine requirements: ${INSTALL_CANDIDATES[*]}"
+
+    if [[ "$assume_yes" == true ]]; then
+      selected_services=("${INSTALL_CANDIDATES[@]}")
+      info "Non-interactive mode enabled (--yes); installing all missing requirements"
+    elif ! is_interactive_terminal; then
+      selected_services=("${INSTALL_CANDIDATES[@]}")
+      info "No interactive terminal detected; installing all missing requirements"
+    else
+      if confirm_default_yes "Install all missing requirements?"; then
+        selected_services=("${INSTALL_CANDIDATES[@]}")
+      else
+        if select_requirements_with_checkboxes "${INSTALL_CANDIDATES[@]}"; then
+          selected_services=("${CHECKBOX_SELECTED[@]}")
+        else
+          warn "Installation canceled by user"
+          selected_services=()
+        fi
+      fi
+    fi
+
+    install_selected_services_for_project "$workflow_repo" "$project_name" "$assume_yes" "${selected_services[@]}" || true
+  fi
+
+  report_service_readiness_for_start "$workflow_repo" "$project_name"
+  if [[ ${#START_MISSING_SERVICES[@]-0} -gt 0 || ${#START_TIMEOUT_SERVICES[@]-0} -gt 0 || ${#START_FAILED_SERVICES[@]-0} -gt 0 ]]; then
+    warn "Machine readiness is still incomplete; project runtime may be degraded"
+  fi
+
+  local project_root
+  project_root="$(project_root_for_project "$workflow_repo" "$project_name")"
+  if [[ -z "$project_root" || ! -d "$project_root" ]]; then
+    error "INSTALL-301 Could not resolve project root from workflow config"
+    return 1
+  fi
+
+  collect_project_dependency_commands "$project_root"
+
+  local install_project_dependencies=false
+  if [[ ${#PROJECT_DEP_COMMANDS[@]} -eq 0 ]]; then
+    info "No project dependency installers detected"
+  elif [[ "$assume_yes" == true ]]; then
+    install_project_dependencies=true
+  elif ! is_interactive_terminal; then
+    install_project_dependencies=true
+  elif confirm_default_yes "Install project dependencies now?"; then
+    install_project_dependencies=true
+  fi
+
+  if [[ "$install_project_dependencies" == true ]]; then
+    run_project_dependency_commands "$project_root"
+  else
+    warn "Project dependency install skipped"
+    info "Run: twf install --project $project_name"
+  fi
+
+  ok "Install flow completed for '$project_name'"
 }
 
 cmd_update() {
@@ -2350,18 +2748,19 @@ cmd_start() {
   echo "[twf] Checking dependencies..."
   report_service_readiness_for_start "$workflow_repo" "$project_name"
 
-  if [[ ${#START_MISSING_SERVICES[@]} -gt 0 || ${#START_TIMEOUT_SERVICES[@]} -gt 0 || ${#START_FAILED_SERVICES[@]} -gt 0 ]]; then
+  if [[ ${#START_MISSING_SERVICES[@]-0} -gt 0 || ${#START_TIMEOUT_SERVICES[@]-0} -gt 0 || ${#START_FAILED_SERVICES[@]-0} -gt 0 ]]; then
     echo
-    if [[ ${#START_MISSING_SERVICES[@]} -gt 0 ]]; then
+    if [[ ${#START_MISSING_SERVICES[@]-0} -gt 0 ]]; then
       echo "[twf] Run: twf service install --project $project_name"
     fi
-    if [[ ${#START_TIMEOUT_SERVICES[@]} -gt 0 || ${#START_FAILED_SERVICES[@]} -gt 0 ]]; then
+    if [[ ${#START_TIMEOUT_SERVICES[@]-0} -gt 0 || ${#START_FAILED_SERVICES[@]-0} -gt 0 ]]; then
       echo "[twf] Run: twf doctor --project $project_name"
     fi
     if [[ "$strict_mode" == true ]]; then
       error "Missing required services for '$project_name' (strict mode enabled)"
       return 1
     fi
+    warn "RUNTIME-401 Project may not work as expected until missing requirements are installed"
   fi
 
   config_override_file="$(project_override_file "$workflow_repo" "$project_name")"
@@ -2537,6 +2936,9 @@ main() {
     ;;
   update)
     cmd_update "$@"
+    ;;
+  install)
+    cmd_install "$@"
     ;;
   list)
     cmd_list "$@"

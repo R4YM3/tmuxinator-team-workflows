@@ -32,6 +32,26 @@ run_twf() {
   run env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" XDG_DATA_HOME="$XDG_DATA_HOME" "$TWF_BIN" "$@"
 }
 
+run_twf_with_path() {
+  local extra_path="$1"
+  shift
+  run env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" XDG_DATA_HOME="$XDG_DATA_HOME" PATH="$extra_path:$PATH" "$TWF_BIN" "$@"
+}
+
+create_mock_command() {
+  local bin_dir="$1"
+  local name="$2"
+  local script_body="$3"
+
+  mkdir -p "$bin_dir"
+  cat >"$bin_dir/$name" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+$script_body
+EOF
+  chmod +x "$bin_dir/$name"
+}
+
 assert_file_exists() {
   local path="$1"
   [[ -f "$path" ]]

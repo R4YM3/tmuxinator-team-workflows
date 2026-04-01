@@ -113,7 +113,7 @@ Create your first workflow:
 twf add
 twf service add web
 twf service add api
-twf service install
+twf install
 twf start
 ```
 
@@ -156,7 +156,7 @@ This creates a demo workspace with:
 Start it:
 
 ```bash
-twf service install --project twf-demo
+twf install --project twf-demo
 twf start twf-demo
 ```
 
@@ -230,6 +230,10 @@ Use `--project <name>` only when targeting another project.
 * `twf service remove`
 * `twf service list`
 * `twf service install`
+
+### Install
+
+* `twf install`
 
 ### Run
 
