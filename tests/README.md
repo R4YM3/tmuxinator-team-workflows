@@ -21,10 +21,10 @@ brew install act
 tests/scripts/test-act
 ```
 
-- `test-act` runs Linux workflows that map to GitHub Actions CI:
-  - `.github/workflows/flow-tests.yml`
-  - `.github/workflows/service-contract-tests.yml`
-  - `.github/workflows/docker-integration-tests.yml`
+- `test-act` runs Linux CI coverage locally with stable defaults:
+  - `act` simulation for `.github/workflows/flow-tests.yml` (Ubuntu matrix)
+  - `act` simulation for `.github/workflows/service-contract-tests.yml` (Ubuntu matrix)
+  - native `tests/scripts/test-docker` for docker integration
 - `wsl-smoke` is `windows-latest` and is not run via `act`.
 
 ## Structure

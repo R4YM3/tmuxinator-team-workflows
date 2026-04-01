@@ -17,12 +17,19 @@ fi
 run_workflow() {
   local workflow="$1"
   echo "[run] act push -W $workflow"
-  act push -W "$workflow" -e "$EVENT_FILE"
+  act push \
+    -W "$workflow" \
+    -e "$EVENT_FILE" \
+    --container-daemon-socket - \
+    --concurrent-jobs 1 \
+    --matrix os:ubuntu-latest \
+    --action-offline-mode
 }
 
 cd "$ROOT_DIR"
 run_workflow ".github/workflows/flow-tests.yml"
 run_workflow ".github/workflows/service-contract-tests.yml"
-run_workflow ".github/workflows/docker-integration-tests.yml"
+echo "[run] tests/scripts/test-docker"
+tests/scripts/test-docker
 
 echo "[info] WSL smoke workflow is windows-latest and is not run via act."
