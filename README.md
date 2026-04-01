@@ -4,6 +4,26 @@
 
 It keeps team workflows consistent while still allowing developer-level overrides.
 
+## Why teams use `twf`
+
+- Onboarding is faster because setup is guided and repeatable.
+- Local environments are more consistent across developers.
+- Daily startup friction is reduced to a small command flow.
+- Team defaults and personal overrides can coexist without conflict.
+
+## Try it in 30 seconds
+
+```bash
+twf add
+twf install
+twf start
+```
+
+That flow creates a runnable project workflow, prepares your environment, and starts your session.
+
+Without `twf`, developers usually stitch setup together manually.
+With `twf`, setup and startup are explicit, repeatable, and easier to debug.
+
 ## Core Concepts
 
 - **project** = runnable development workflow
