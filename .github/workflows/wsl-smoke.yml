@@ -8,10 +8,15 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   changes:
     name: wsl-changes
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       run_wsl: ${{ steps.filter.outputs.wsl }}
     steps:
@@ -30,6 +35,7 @@ jobs:
     needs: changes
     if: ${{ github.event_name == 'push' || needs.changes.outputs.run_wsl == 'true' }}
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 

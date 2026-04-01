@@ -8,10 +8,15 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   changes:
     name: service-contract-changes
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       run_services: ${{ steps.filter.outputs.services }}
     steps:
@@ -32,6 +37,7 @@ jobs:
     needs: changes
     if: ${{ github.event_name == 'push' || needs.changes.outputs.run_services == 'true' }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

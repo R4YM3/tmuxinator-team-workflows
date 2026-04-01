@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 EVENT_FILE="$ROOT_DIR/.github/act/push-main.json"
+MODE="${1:-quick}"
 
 if ! command -v act >/dev/null 2>&1; then
   echo "[error] act is required. Install it with: brew install act" >&2
@@ -14,11 +15,13 @@ if [[ ! -f "$EVENT_FILE" ]]; then
   exit 1
 fi
 
-run_workflow() {
+run_act() {
   local workflow="$1"
-  echo "[run] act push -W $workflow"
+  local job="$2"
+  echo "[run] act push -W $workflow -j $job"
   act push \
     -W "$workflow" \
+    -j "$job" \
     -e "$EVENT_FILE" \
     --container-daemon-socket - \
     --concurrent-jobs 1 \
@@ -27,9 +30,32 @@ run_workflow() {
 }
 
 cd "$ROOT_DIR"
-run_workflow ".github/workflows/flow-tests.yml"
-run_workflow ".github/workflows/service-contract-tests.yml"
-echo "[run] tests/scripts/test-docker"
-tests/scripts/test-docker
 
-echo "[info] WSL smoke workflow is windows-latest and is not run via act."
+if [[ "$MODE" == "full" ]]; then
+  run_act ".github/workflows/flow-tests.yml" flow
+  run_act ".github/workflows/service-contract-tests.yml" services
+else
+  run_act ".github/workflows/flow-tests.yml" changes
+  run_act ".github/workflows/service-contract-tests.yml" changes
+  run_act ".github/workflows/docker-integration-tests.yml" changes
+  run_act ".github/workflows/wsl-smoke.yml" changes
+fi
+
+if [[ "$MODE" == "changes" ]]; then
+  echo "[info] changes mode complete"
+  exit 0
+fi
+
+echo "[run] tests/scripts/test-flow"
+tests/scripts/test-flow
+echo "[run] tests/scripts/test-services"
+tests/scripts/test-services
+
+if [[ "${TWF_SKIP_DOCKER:-0}" == "1" ]]; then
+  echo "[info] skipping docker integration (TWF_SKIP_DOCKER=1)"
+else
+  echo "[run] tests/scripts/test-docker"
+  tests/scripts/test-docker
+fi
+
+echo "[info] WSL smoke job is windows-latest and is not run via act."

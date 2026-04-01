@@ -19,12 +19,14 @@ tests/scripts/test-act
 ```bash
 brew install act
 tests/scripts/test-act
+tests/scripts/test-act changes
+tests/scripts/test-act full
 ```
 
-- `test-act` runs Linux CI coverage locally with stable defaults:
-  - `act` simulation for `.github/workflows/flow-tests.yml` (Ubuntu matrix)
-  - `act` simulation for `.github/workflows/service-contract-tests.yml` (Ubuntu matrix)
-  - native `tests/scripts/test-docker` for docker integration
+- `test-act` (quick mode) runs `act` change-detection jobs plus native test scripts.
+- `test-act changes` runs only `act` change-detection jobs (fast sanity check).
+- `test-act full` runs full `act` Linux jobs for flow + service workflows, then native scripts.
+- Set `TWF_SKIP_DOCKER=1` to skip the native docker integration step during local runs.
 - `wsl-smoke` is `windows-latest` and is not run via `act`.
 
 ## Structure
