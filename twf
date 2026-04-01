@@ -16,7 +16,7 @@ TWF_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/twf"
 TWF_CONFIG_FILE="$TWF_CONFIG_DIR/config.yml"
 SERVICES_DIR="$RUNTIME_DIR/services"
 SERVICE_STATE_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/twf/state/services"
-SERVICE_CHECK_TIMEOUT_SEC="${TWF_SERVICE_CHECK_TIMEOUT_SEC:-1.5}"
+SERVICE_CHECK_TIMEOUT_SEC="${TWF_SERVICE_CHECK_TIMEOUT_SEC:-4.0}"
 
 START_MISSING_SERVICES=()
 START_TIMEOUT_SERVICES=()
@@ -779,8 +779,21 @@ confirm_remove() {
 confirm_default_yes() {
   local prompt="$1"
   local response=""
-  read -r -p "$prompt [Y/n]: " response
-  [[ -z "$response" || "$response" =~ ^[Yy]$ ]]
+
+  while true; do
+    read -r -p "$prompt [Y/n]: " response
+    case "${response:-}" in
+    "" | y | Y | yes | YES | Yes)
+      return 0
+      ;;
+    n | N | no | NO | No)
+      return 1
+      ;;
+    *)
+      info "Please answer y or n."
+      ;;
+    esac
+  done
 }
 
 is_interactive_terminal() {
@@ -1395,19 +1408,16 @@ EOF
   if [[ ${#suggested_services[@]} -gt 0 ]]; then
     info "Auto-enabled suggested services: ${suggested_services[*]}"
   fi
-  info "Next steps:"
-  echo "  twf validate"
-  echo "  twf doctor"
-  echo "  twf install --project $final_name"
-  echo "  twf start $final_name"
 
   if is_interactive_terminal; then
     if confirm_default_yes "Run environment setup now?"; then
       cmd_install --project "$final_name"
     else
       info "Skipped environment setup"
-      info "Run: twf install --project $final_name"
+      info "Run: twf install"
     fi
+  else
+    info "Run: twf install"
   fi
 }
 
@@ -2238,16 +2248,21 @@ EOF
   if [[ ${#INSTALL_CANDIDATES[@]} -eq 0 ]]; then
     ok "Machine readiness already satisfied"
   else
-    echo "[check] Missing machine requirements: ${INSTALL_CANDIDATES[*]}"
+    if [[ ${#START_MISSING_SERVICES[@]-0} -gt 0 ]]; then
+      echo "[check] Missing machine requirements: ${START_MISSING_SERVICES[*]}"
+    fi
+    if [[ ${#START_TIMEOUT_SERVICES[@]-0} -gt 0 || ${#START_FAILED_SERVICES[@]-0} -gt 0 ]]; then
+      echo "[check] Requirements needing verification: ${INSTALL_CANDIDATES[*]}"
+    fi
 
     if [[ "$assume_yes" == true ]]; then
       selected_services=("${INSTALL_CANDIDATES[@]}")
-      info "Non-interactive mode enabled (--yes); installing all missing requirements"
+      info "Non-interactive mode enabled (--yes); installing selected requirements"
     elif ! is_interactive_terminal; then
       selected_services=("${INSTALL_CANDIDATES[@]}")
-      info "No interactive terminal detected; installing all missing requirements"
+      info "No interactive terminal detected; installing selected requirements"
     else
-      if confirm_default_yes "Install all missing requirements?"; then
+      if confirm_default_yes "Install suggested requirements now?"; then
         selected_services=("${INSTALL_CANDIDATES[@]}")
       else
         if select_requirements_with_checkboxes "${INSTALL_CANDIDATES[@]}"; then
