@@ -1589,7 +1589,7 @@ report_service_readiness_for_start() {
       if [[ "$state_ready" == true ]]; then
         printf '✔ %s -> ready\n' "$service"
       else
-        printf '⚠ %s -> not installed\n' "$service"
+        printf '⚠ %s -> detected but not managed by twf\n' "$service"
         START_MISSING_SERVICES+=("$service")
       fi
       continue
@@ -2279,7 +2279,7 @@ EOF
     done
 
     if [[ ${#START_MISSING_SERVICES[@]-0} -gt 0 ]]; then
-      echo "[check] Missing machine requirements: ${formatted_missing[*]}"
+      echo "[check] Requirements to set up: ${formatted_missing[*]}"
     fi
     if [[ ${#START_TIMEOUT_SERVICES[@]-0} -gt 0 || ${#START_FAILED_SERVICES[@]-0} -gt 0 ]]; then
       echo "[check] Requirements needing verification: ${formatted_candidates[*]}"
@@ -2292,7 +2292,7 @@ EOF
       selected_services=("${INSTALL_CANDIDATES[@]}")
       info "No interactive terminal detected; installing selected requirements"
     else
-      if confirm_default_yes "Install suggested requirements now?"; then
+      if confirm_default_yes "Proceed with environment setup for these requirements?"; then
         selected_services=("${INSTALL_CANDIDATES[@]}")
       else
         if select_requirements_with_checkboxes "${INSTALL_CANDIDATES[@]}"; then
