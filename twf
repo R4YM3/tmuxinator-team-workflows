@@ -1587,11 +1587,21 @@ report_service_readiness_for_start() {
     set -e
 
     if [[ "$check_rc" -eq 0 ]]; then
+      local detail
+      detail="$(service_ready_detail "$service")"
       if [[ "$state_ready" == true ]]; then
-        printf '✔ %s -> ready\n' "$service"
+        if [[ -n "$detail" ]]; then
+          printf '✔ %s -> ready %s\n' "$service" "$detail"
+        else
+          printf '✔ %s -> ready\n' "$service"
+        fi
       elif [[ "$adopt_detected" == true ]]; then
         write_service_state "$project_name" "$service" "$SERVICE_CTX_VERSION" "$SERVICE_CTX_CONFIG_HASH"
-        printf '✔ %s -> ready (detected on machine)\n' "$service"
+        if [[ -n "$detail" ]]; then
+          printf '✔ %s -> ready %s\n' "$service" "$detail"
+        else
+          printf '✔ %s -> ready (detected on machine)\n' "$service"
+        fi
       else
         printf '⚠ %s -> detected but not managed by twf\n' "$service"
         START_MISSING_SERVICES+=("$service")
@@ -1641,6 +1651,25 @@ service_requirement_label() {
   esac
 }
 
+service_ready_detail() {
+  local service="$1"
+  case "$service" in
+  node)
+    local required_major="${TWF_NODE_REQUIRED_MAJOR:-20}"
+    local node_version=""
+    node_version="$(node --version 2>/dev/null || true)"
+    if [[ -n "$node_version" ]]; then
+      echo "($node_version, required >= v$required_major)"
+    else
+      echo "(required >= v$required_major)"
+    fi
+    ;;
+  *)
+    echo ""
+    ;;
+  esac
+}
+
 install_selected_services_for_project() {
   local repo="$1"
   local project_name="$2"
@@ -1672,7 +1701,7 @@ install_selected_services_for_project() {
       continue
     fi
 
-    if ! TWF_SERVICE_CONFIG_JSON="$SERVICE_CTX_CONFIG_JSON" bash "$SERVICE_CTX_SCRIPT" check; then
+    if ! TWF_SERVICE_CONFIG_JSON="$SERVICE_CTX_CONFIG_JSON" bash "$SERVICE_CTX_SCRIPT" check >/dev/null 2>&1; then
       error "INSTALL-102 Requirement check failed after install: $service"
       failures+=("$service")
       continue
@@ -2646,7 +2675,13 @@ timeout = float(sys.argv[2])
 env = os.environ.copy()
 
 try:
-    completed = subprocess.run([script, "check"], env=env, timeout=timeout)
+    completed = subprocess.run(
+        [script, "check"],
+        env=env,
+        timeout=timeout,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     sys.exit(completed.returncode)
 except subprocess.TimeoutExpired:
     sys.exit(124)
