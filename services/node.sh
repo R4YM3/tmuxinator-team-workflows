@@ -23,21 +23,39 @@ check_service() {
 
   local missing=0
   if command -v nvm >/dev/null 2>&1; then
-    ok "nvm found"
+    local nvm_version
+    nvm_version="$(nvm --version 2>/dev/null || true)"
+    if [[ -n "$nvm_version" ]]; then
+      ok "nvm found ($nvm_version)"
+    else
+      ok "nvm found"
+    fi
   else
     warn "nvm missing"
     missing=1
   fi
 
   if command -v node >/dev/null 2>&1; then
-    ok "node found"
+    local node_version
+    node_version="$(node --version 2>/dev/null || true)"
+    if [[ -n "$node_version" ]]; then
+      ok "node found ($node_version)"
+    else
+      ok "node found"
+    fi
   else
     warn "node missing"
     missing=1
   fi
 
   if command -v npm >/dev/null 2>&1; then
-    ok "npm found"
+    local npm_version
+    npm_version="$(npm --version 2>/dev/null || true)"
+    if [[ -n "$npm_version" ]]; then
+      ok "npm found ($npm_version)"
+    else
+      ok "npm found"
+    fi
   else
     warn "npm missing"
     missing=1
