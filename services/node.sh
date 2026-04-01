@@ -2,6 +2,8 @@
 set -euo pipefail
 
 SERVICE_VERSION="1"
+REQUIRED_NODE_MAJOR="${TWF_NODE_REQUIRED_MAJOR:-20}"
+REQUIRED_NVM_VERSION="${TWF_NVM_REQUIRED_VERSION:-0.40.0}"
 
 ok() { printf "[ok] %s\n" "$1"; }
 info() { printf "[info] %s\n" "$1"; }
@@ -18,20 +20,34 @@ load_nvm() {
   fi
 }
 
-check_service() {
-  load_nvm
+nvm_installation_exists() {
+  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  [[ -s "$NVM_DIR/nvm.sh" ]] && return 0
+  [[ -s "/opt/homebrew/opt/nvm/nvm.sh" ]] && return 0
+  [[ -s "/usr/local/opt/nvm/nvm.sh" ]] && return 0
+  return 1
+}
 
+node_major_from_version() {
+  local version="$1"
+  version="${version#v}"
+  echo "${version%%.*}"
+}
+
+check_service() {
   local missing=0
   if command -v nvm >/dev/null 2>&1; then
     local nvm_version
     nvm_version="$(nvm --version 2>/dev/null || true)"
     if [[ -n "$nvm_version" ]]; then
-      ok "nvm found ($nvm_version)"
+      ok "nvm found ($nvm_version, required >= $REQUIRED_NVM_VERSION)"
     else
-      ok "nvm found"
+      ok "nvm found (required >= $REQUIRED_NVM_VERSION)"
     fi
+  elif nvm_installation_exists; then
+    ok "nvm installation found (required >= $REQUIRED_NVM_VERSION)"
   else
-    warn "nvm missing"
+    warn "nvm missing (required >= $REQUIRED_NVM_VERSION)"
     missing=1
   fi
 
@@ -39,12 +55,19 @@ check_service() {
     local node_version
     node_version="$(node --version 2>/dev/null || true)"
     if [[ -n "$node_version" ]]; then
-      ok "node found ($node_version)"
+      local node_major
+      node_major="$(node_major_from_version "$node_version")"
+      if [[ "$node_major" =~ ^[0-9]+$ ]] && [[ "$node_major" -ge "$REQUIRED_NODE_MAJOR" ]]; then
+        ok "node found ($node_version, required >= v$REQUIRED_NODE_MAJOR)"
+      else
+        warn "node version too old ($node_version, required >= v$REQUIRED_NODE_MAJOR)"
+        missing=1
+      fi
     else
-      ok "node found"
+      ok "node found (required >= v$REQUIRED_NODE_MAJOR)"
     fi
   else
-    warn "node missing"
+    warn "node missing (required >= v$REQUIRED_NODE_MAJOR)"
     missing=1
   fi
 

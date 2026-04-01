@@ -1179,6 +1179,7 @@ ensure_local_workflow_link() {
   local project_name="$1"
   local project_dir="$2"
   local repo_dir="$3"
+  local quiet="${4:-false}"
   local local_dir="$repo_dir/.twf"
   local project_link="$local_dir/project.yml"
   local developer_link="$local_dir/developer.yml"
@@ -1188,7 +1189,9 @@ ensure_local_workflow_link() {
   mkdir -p "$local_dir"
   ln -sfn "$source_project_file" "$project_link"
   ln -sfn "$source_developer_file" "$developer_link"
-  ok "Created local workflow links in: $local_dir"
+  if [[ "$quiet" != true ]]; then
+    ok "Created local workflow links in: $local_dir"
+  fi
 
   if [[ -L "$local_dir/workflow" || -d "$local_dir/workflow" ]]; then
     rm -rf "$local_dir/workflow"
@@ -1622,6 +1625,18 @@ collect_install_candidates_for_project() {
   done
 }
 
+service_requirement_label() {
+  local service="$1"
+  case "$service" in
+  node)
+    echo "node (required >= v${TWF_NODE_REQUIRED_MAJOR:-20})"
+    ;;
+  *)
+    echo "$service"
+    ;;
+  esac
+}
+
 install_selected_services_for_project() {
   local repo="$1"
   local project_name="$2"
@@ -1643,10 +1658,12 @@ install_selected_services_for_project() {
     idx=$((idx + 1))
     require_service "$service"
     build_service_state_context "$repo" "$project_name" "$service"
+    local service_label
+    service_label="$(service_requirement_label "$service")"
 
-    echo "[install] ($idx/$total) $service"
+    echo "[install] ($idx/$total) $service_label"
     if ! TWF_SERVICE_CONFIG_JSON="$SERVICE_CTX_CONFIG_JSON" TWF_SERVICE_ASSUME_YES="$assume_yes" bash "$SERVICE_CTX_SCRIPT" install; then
-      error "INSTALL-101 Failed to install machine requirement: $service"
+      error "INSTALL-101 Failed to install machine requirement: $service_label"
       failures+=("$service")
       continue
     fi
@@ -2248,11 +2265,24 @@ EOF
   if [[ ${#INSTALL_CANDIDATES[@]} -eq 0 ]]; then
     ok "Machine readiness already satisfied"
   else
+    local formatted_missing=()
+    local formatted_candidates=()
+    local service=""
+
+    for service in "${START_MISSING_SERVICES[@]-}"; do
+      [[ -n "$service" ]] || continue
+      formatted_missing+=("$(service_requirement_label "$service")")
+    done
+    for service in "${INSTALL_CANDIDATES[@]}"; do
+      [[ -n "$service" ]] || continue
+      formatted_candidates+=("$(service_requirement_label "$service")")
+    done
+
     if [[ ${#START_MISSING_SERVICES[@]-0} -gt 0 ]]; then
-      echo "[check] Missing machine requirements: ${START_MISSING_SERVICES[*]}"
+      echo "[check] Missing machine requirements: ${formatted_missing[*]}"
     fi
     if [[ ${#START_TIMEOUT_SERVICES[@]-0} -gt 0 || ${#START_FAILED_SERVICES[@]-0} -gt 0 ]]; then
-      echo "[check] Requirements needing verification: ${INSTALL_CANDIDATES[*]}"
+      echo "[check] Requirements needing verification: ${formatted_candidates[*]}"
     fi
 
     if [[ "$assume_yes" == true ]]; then
@@ -2765,11 +2795,21 @@ cmd_start() {
 
   if [[ ${#START_MISSING_SERVICES[@]-0} -gt 0 || ${#START_TIMEOUT_SERVICES[@]-0} -gt 0 || ${#START_FAILED_SERVICES[@]-0} -gt 0 ]]; then
     echo
+    local inferred_project
+    inferred_project="$(infer_start_project_from_context)"
     if [[ ${#START_MISSING_SERVICES[@]-0} -gt 0 ]]; then
-      echo "[twf] Run: twf service install --project $project_name"
+      if [[ "$inferred_project" == "$project_name" ]]; then
+        echo "[twf] Run: twf install"
+      else
+        echo "[twf] Run: twf install --project $project_name"
+      fi
     fi
     if [[ ${#START_TIMEOUT_SERVICES[@]-0} -gt 0 || ${#START_FAILED_SERVICES[@]-0} -gt 0 ]]; then
-      echo "[twf] Run: twf doctor --project $project_name"
+      if [[ "$inferred_project" == "$project_name" ]]; then
+        echo "[twf] Run: twf doctor"
+      else
+        echo "[twf] Run: twf doctor --project $project_name"
+      fi
     fi
     if [[ "$strict_mode" == true ]]; then
       error "Missing required services for '$project_name' (strict mode enabled)"
@@ -2790,7 +2830,7 @@ cmd_start() {
   local rendered_root
   rendered_root="$(read_rendered_config_root "$rendered_config_file")"
   if [[ -n "$rendered_root" && -d "$rendered_root" ]]; then
-    ensure_local_workflow_link "$project_name" "$(project_dir "$workflow_repo" "$project_name")" "$rendered_root"
+    ensure_local_workflow_link "$project_name" "$(project_dir "$workflow_repo" "$project_name")" "$rendered_root" true
   fi
 
   sanitize_tmux_env
