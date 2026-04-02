@@ -305,6 +305,16 @@ validate_project_name() {
   fi
 }
 
+slugify_workflow_name() {
+  local raw_name="$1"
+  local slug
+  slug="$(printf '%s' "$raw_name" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-+/-/g')"
+  if [[ -z "$slug" ]]; then
+    slug="workflow"
+  fi
+  echo "$slug"
+}
+
 expand_path() {
   local path="$1"
   if [[ "$path" == ~* ]]; then
@@ -1233,6 +1243,12 @@ resolve_alias_conflict() {
         error "Workflow name cannot be empty"
         continue
       fi
+      local renamed_slug
+      renamed_slug="$(slugify_workflow_name "$renamed")"
+      if [[ "$renamed_slug" != "$renamed" ]]; then
+        info "Using workflow name: '$renamed_slug'"
+      fi
+      renamed="$renamed_slug"
       validate_project_name "$renamed"
       name="$renamed"
       ;;
@@ -1420,7 +1436,7 @@ EOF
 
   if [[ -z "$project_name" ]]; then
     local default_name
-    default_name="$(basename "$source_root")"
+    default_name="$(slugify_workflow_name "$(basename "$source_root")")"
     project_name="$default_name"
 
     if [[ -t 0 ]]; then
@@ -1429,6 +1445,13 @@ EOF
       project_name="${entered_name:-$default_name}"
     fi
   fi
+
+  local project_name_slug
+  project_name_slug="$(slugify_workflow_name "$project_name")"
+  if [[ "$project_name_slug" != "$project_name" ]]; then
+    info "Using workflow name: '$project_name_slug'"
+  fi
+  project_name="$project_name_slug"
 
   validate_project_name "$project_name"
 
