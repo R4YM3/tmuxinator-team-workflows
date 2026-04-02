@@ -134,10 +134,15 @@ spinner_stop() {
     SPINNER_PID=""
   fi
 
+  printf "\r\033[2K"
   if [[ "$status" -eq 0 ]]; then
-    printf "\r  ✓ %s\n" "$label"
+    if [[ "$label" == Installing\ * ]]; then
+      printf "  ✓ Installed %s\n" "${label#Installing }"
+    else
+      printf "  ✓ %s\n" "$label"
+    fi
   else
-    printf "\r  ✖ %s\n" "$label"
+    printf "  ✖ %s\n" "$label"
   fi
 }
 
@@ -2129,7 +2134,7 @@ install_selected_services_for_project() {
     local cmd_log
     cmd_log="$(mktemp "${TMPDIR:-/tmp}/oo-service-${idx}-XXXXXX")"
     local cmd_status=0
-    if run_logged_step "Installing $service_label" "$verbose_mode" "$cmd_log" false env "OO_SERVICE_CONFIG_JSON=$SERVICE_CTX_CONFIG_JSON" "OO_SERVICE_ASSUME_YES=$assume_yes" bash "$SERVICE_CTX_SCRIPT" install; then
+    if run_logged_step "Installing $service_label" "$verbose_mode" "$cmd_log" true env "OO_SERVICE_CONFIG_JSON=$SERVICE_CTX_CONFIG_JSON" "OO_SERVICE_ASSUME_YES=$assume_yes" bash "$SERVICE_CTX_SCRIPT" install; then
       cmd_status=0
     else
       cmd_status=$?
@@ -2337,8 +2342,9 @@ PY
     done
     echo
     echo "What you can do"
-    echo "  • Review: npm audit"
+    echo "  • Review advisories: npm audit"
     echo "  • Safe fixes: npm audit fix"
+    echo "  • Environment insights: oo doctor"
   fi
 
   return 0
@@ -3161,7 +3167,7 @@ EOF
   echo "Updating runtime"
   local update_log
   update_log="$(mktemp "${TMPDIR:-/tmp}/oo-update-XXXXXX")"
-  if ! run_logged_step "Checking for updates" "$verbose" "$update_log" false git -C "$RUNTIME_DIR" pull --ff-only; then
+  if ! run_logged_step "Checking for updates" "$verbose" "$update_log" true git -C "$RUNTIME_DIR" pull --ff-only; then
     rm -f "$update_log"
     error "SYS-001 Failed to update runtime repository"
     info "Run: oo update --verbose"

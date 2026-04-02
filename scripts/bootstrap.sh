@@ -49,13 +49,26 @@ spinner_should_render() {
 
 spinner_start() {
   local label="$1"
+  local show_percent="${2:-false}"
   local frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
   (
     local i=0
+    local percent=0
+    local tick=0
     while :; do
-      printf "\r  %s %s" "${frames[$((i % ${#frames[@]}))]}" "$label"
+      if [[ "$show_percent" == true ]]; then
+        if [[ "$percent" -lt 80 ]]; then
+          percent=$((percent + 1))
+        elif [[ "$percent" -lt 95 ]] && [[ $((tick % 4)) -eq 0 ]]; then
+          percent=$((percent + 1))
+        fi
+        printf "\r  %s %s (%d%%)" "${frames[$((i % ${#frames[@]}))]}" "$label" "$percent"
+      else
+        printf "\r  %s %s" "${frames[$((i % ${#frames[@]}))]}" "$label"
+      fi
       sleep 0.1
       i=$((i + 1))
+      tick=$((tick + 1))
     done
   ) &
   BOOTSTRAP_SPINNER_PID=$!
@@ -71,19 +84,27 @@ spinner_stop() {
     BOOTSTRAP_SPINNER_PID=""
   fi
 
+  printf "\r\033[2K"
   if [[ "$status" -eq 0 ]]; then
-    printf "\r  ✓ %s\n" "$label"
+    if [[ "$label" == Installing\ * ]]; then
+      printf "  ✓ Installed %s\n" "${label#Installing }"
+    elif [[ "$label" == Checking\ * ]]; then
+      printf "  ✓ %s\n" "${label/Checking/Checked}"
+    else
+      printf "  ✓ %s\n" "$label"
+    fi
   else
-    printf "\r  ✖ %s\n" "$label"
+    printf "  ✖ %s\n" "$label"
   fi
 }
 
 run_step() {
   local label="$1"
-  shift
+  local show_percent="${2:-false}"
+  shift 2
 
   if spinner_should_render; then
-    spinner_start "$label"
+    spinner_start "$label" "$show_percent"
     set +e
     "$@"
     local rc=$?
@@ -169,7 +190,7 @@ ensure_required_dependencies() {
     return 1
   fi
 
-  if ! run_step "Installing missing tools" install_requirements; then
+  if ! run_step "Installing missing tools" true install_requirements; then
     failure_block "BST-004" "Could not install required tools with a supported package manager."
     return 1
   fi
@@ -330,12 +351,12 @@ echo
 
 echo "Updating runtime"
 if [[ -d "$OO_INSTALL_ROOT/.git" ]]; then
-  if ! run_step "Checking for updates" run_git -C "$OO_INSTALL_ROOT" pull --ff-only; then
+  if ! run_step "Checking for updates" true run_git -C "$OO_INSTALL_ROOT" pull --ff-only; then
     failure_block "BST-009" "Could not fetch runtime from repository."
     exit 1
   fi
 else
-  if ! run_step "Cloning runtime" run_git clone "$OO_REPO_URL" "$OO_INSTALL_ROOT"; then
+  if ! run_step "Cloning runtime" true run_git clone "$OO_REPO_URL" "$OO_INSTALL_ROOT"; then
     failure_block "BST-010" "Could not clone runtime repository."
     exit 1
   fi
@@ -352,7 +373,7 @@ fi
 echo
 
 echo "Configuring CLI"
-if ! run_step "Configuring CLI" configure_cli_step; then
+if ! run_step "Configuring CLI" true configure_cli_step; then
   failure_block "BST-011" "Failed to configure CLI symlink or PATH."
   exit 1
 fi
