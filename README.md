@@ -21,7 +21,7 @@ Done.
 
 Loop:
 
-- detects your project
+- detects your project or workspace
 - creates a workflow
 - installs what's missing automatically
 - starts your services
@@ -48,25 +48,28 @@ Loop:
 - Team workflow + personal overrides ⭐
   - A shared workflow defines how the project runs.
   - You can safely override it locally-without changing the team setup.
+- Calm by default, detailed when you need it
+  - Minimal output by default. Use `--verbose` to see everything.
 - Workspace-aware
   - Handles multi-repo setups automatically.
 
-## 🧩 The problem
+## 🧩 What Loop does
 
-Most teams don't struggle with code.
-They struggle with everything around it:
+Loop is used to:
 
-- setup instructions go stale
-- environments drift
-- debugging startup becomes guesswork
+- define runnable workflows
+- prepare local environments
+- manage reusable services
+- run and diagnose workflows
 
-## ✅ The fix
+## 🧱 Core concepts
 
-Loop makes your workflow:
-
-- explicit
-- repeatable
-- diagnosable
+- workflow -> runnable development workflow
+- service -> reusable unit (web, api, worker, redis)
+- command -> executable run instruction
+- requirements -> what must be installed
+- environment setup -> preparing machine + workflow prerequisites
+- runtime -> executing the workflow
 
 ## ⚙️ Install
 
@@ -107,13 +110,28 @@ See exactly what's wrong:
 
 With clear next steps to fix it.
 
-## 🧱 How it works
+## 📣 Output you can actually read
 
-A workflow is a runnable dev environment:
+Loop keeps output calm and focused by default:
 
-- services -> web, api, worker, redis
-- commands -> what runs
-- requirements -> what's needed
+```text
+◆ Starting services
+✓ ready
+! warning
+✖ blocking error
+```
+
+No noise. Just what matters.
+
+Need more detail?
+
+```bash
+oo install --verbose
+oo doctor --verbose
+```
+
+Quiet when you want flow.
+Verbose when you need answers.
 
 ## 🧪 Config
 
@@ -137,13 +155,52 @@ oo add
 
 Loop creates a workspace automatically.
 
-## 📣 Output you can actually read
+## 🔍 Smart install behavior
 
-```text
-◆ Starting services
-✓ ready
-! warning
-✖ blocking error
+`oo install` handles both:
+
+- machine requirements
+- workflow dependencies
+
+Supports:
+
+- `--yes` -> non-interactive
+- `--plan` -> preview before installing
+- `--no-workflow-deps` -> setup only
+
+## ⚡ Common flows
+
+First-time setup:
+
+```bash
+oo add
+oo start
+```
+
+Controlled setup:
+
+```bash
+oo add --dry-run
+oo add
+oo install --workflow <name>
+oo doctor
+oo start <name>
+```
+
+Non-interactive setup:
+
+```bash
+oo add
+oo install --yes
+oo start
+```
+
+Add a service:
+
+```bash
+oo service add redis
+oo install
+oo start
 ```
 
 ## 🎯 What Loop is
@@ -158,18 +215,6 @@ Loop creates a workspace automatically.
 - not production orchestration
 - not a package manager
 
-## 🧪 Testing
-
-```bash
-tests/scripts/test-flow
-tests/scripts/test-services
-tests/scripts/test-docker
-```
-
-## 🪪 License
-
-MIT
-
 ## 💬 Final thought
 
 Every project has a workflow.
@@ -177,3 +222,10 @@ Every project has a workflow.
 Most teams just don't control it.
 
 Loop does.
+
+## 🧠 Why this version is better
+
+- keeps the hook strong
+- adds credibility (real features)
+- surfaces power features (install, doctor, overrides)
+- avoids turning into a wall of text
