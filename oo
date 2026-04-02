@@ -2443,6 +2443,175 @@ print("ADVISORY|nuget|0|{}|{}|{}|{}|{}|{}".format(
 PY
 }
 
+summarize_npm_audit_report() {
+  local log_file="$1"
+
+  python3 - "$log_file" <<'PY'
+import json
+import re
+import sys
+
+text = open(sys.argv[1], 'r', errors='replace').read()
+json_start = text.find('{')
+if json_start == -1:
+    sys.exit(0)
+
+payload = None
+for end in range(len(text), json_start, -1):
+    snippet = text[json_start:end]
+    try:
+      payload = json.loads(snippet)
+      break
+    except Exception:
+      continue
+
+if not isinstance(payload, dict):
+    sys.exit(0)
+
+meta = payload.get('metadata') if isinstance(payload.get('metadata'), dict) else {}
+vuln = meta.get('vulnerabilities') if isinstance(meta.get('vulnerabilities'), dict) else {}
+
+low = int(vuln.get('low') or 0)
+moderate = int(vuln.get('moderate') or 0)
+high = int(vuln.get('high') or 0)
+critical = int(vuln.get('critical') or 0)
+total = int(vuln.get('total') or (low + moderate + high + critical))
+
+print("ADVISORY|npm|0|0|{}|{}|{}|{}|{}".format(total, low, moderate, high, critical))
+PY
+}
+
+summarize_dotnet_audit_reports() {
+  local vuln_log_file="$1"
+  local deprecated_log_file="$2"
+
+  python3 - "$vuln_log_file" "$deprecated_log_file" <<'PY'
+import re
+import sys
+
+vuln_text = open(sys.argv[1], 'r', errors='replace').read()
+deprecated_text = open(sys.argv[2], 'r', errors='replace').read()
+
+low = len(re.findall(r'\blow\b', vuln_text, flags=re.I))
+moderate = len(re.findall(r'\bmoderate\b', vuln_text, flags=re.I))
+high = len(re.findall(r'\bhigh\b', vuln_text, flags=re.I))
+critical = len(re.findall(r'\bcritical\b', vuln_text, flags=re.I))
+
+nu190 = {
+    'low': len(re.findall(r'\bNU1901\b', vuln_text, flags=re.I)),
+    'moderate': len(re.findall(r'\bNU1902\b', vuln_text, flags=re.I)),
+    'high': len(re.findall(r'\bNU1903\b', vuln_text, flags=re.I)),
+    'critical': len(re.findall(r'\bNU1904\b', vuln_text, flags=re.I)),
+}
+
+low = max(low, nu190['low'])
+moderate = max(moderate, nu190['moderate'])
+high = max(high, nu190['high'])
+critical = max(critical, nu190['critical'])
+
+deprecated_count = len(re.findall(r'\bdeprecated\b', deprecated_text, flags=re.I))
+vuln_total = low + moderate + high + critical
+
+print("ADVISORY|nuget|0|{}|{}|{}|{}|{}|{}".format(deprecated_count, vuln_total, low, moderate, high, critical))
+PY
+}
+
+refresh_dependency_advisories_for_project() {
+  local repo="$1"
+  local project_name="$2"
+  local verbose_mode="${3:-false}"
+
+  local project_root
+  project_root="$(project_root_for_project "$repo" "$project_name" 2>/dev/null || true)"
+  [[ -n "$project_root" && -d "$project_root" ]] || return 0
+
+  load_env_file_values "$project_root"
+  build_env_overrides_for_command
+  collect_project_dependency_commands "$project_root"
+
+  DEPENDENCY_ADVISORY_RECORDS=()
+
+  local label
+  for label in "${PROJECT_DEP_LABELS[@]}"; do
+    if [[ "$label" == "npm install" ]]; then
+      if ! command -v npm >/dev/null 2>&1; then
+        continue
+      fi
+
+      local npm_audit_log
+      npm_audit_log="$(mktemp "${TMPDIR:-/tmp}/oo-doc-npm-audit-XXXXXX")"
+      local npm_status=0
+      if [[ ${#OO_COMMAND_ENV_OVERRIDES[@]} -gt 0 ]]; then
+        set +e
+        env "${OO_COMMAND_ENV_OVERRIDES[@]}" bash -c "cd \"$project_root\" && npm audit --json" >"$npm_audit_log" 2>&1
+        npm_status=$?
+        set -e
+      else
+        set +e
+        bash -c "cd \"$project_root\" && npm audit --json" >"$npm_audit_log" 2>&1
+        npm_status=$?
+        set -e
+      fi
+
+      if [[ "$npm_status" -eq 0 || "$npm_status" -eq 1 ]]; then
+        local advisory_line
+        while IFS= read -r advisory_line; do
+          [[ "$advisory_line" == ADVISORY\|* ]] || continue
+          local record="${advisory_line#ADVISORY|}"
+          if append_unique_line "$record" "${DEPENDENCY_ADVISORY_RECORDS[@]-}"; then
+            DEPENDENCY_ADVISORY_RECORDS+=("$record")
+          fi
+        done < <(summarize_npm_audit_report "$npm_audit_log")
+      elif [[ "$verbose_mode" == true ]]; then
+        warn "Skipping npm advisory refresh: npm audit exited with code $npm_status"
+      fi
+      rm -f "$npm_audit_log"
+    elif [[ "$label" == "dotnet restore" ]]; then
+      if ! command -v dotnet >/dev/null 2>&1; then
+        continue
+      fi
+
+      local dotnet_vuln_log
+      local dotnet_dep_log
+      dotnet_vuln_log="$(mktemp "${TMPDIR:-/tmp}/oo-doc-dotnet-vuln-XXXXXX")"
+      dotnet_dep_log="$(mktemp "${TMPDIR:-/tmp}/oo-doc-dotnet-dep-XXXXXX")"
+
+      set +e
+      if [[ ${#OO_COMMAND_ENV_OVERRIDES[@]} -gt 0 ]]; then
+        env "${OO_COMMAND_ENV_OVERRIDES[@]}" bash -c "cd \"$project_root\" && dotnet list package --vulnerable --include-transitive" >"$dotnet_vuln_log" 2>&1
+      else
+        bash -c "cd \"$project_root\" && dotnet list package --vulnerable --include-transitive" >"$dotnet_vuln_log" 2>&1
+      fi
+      local dotnet_vuln_status=$?
+
+      if [[ ${#OO_COMMAND_ENV_OVERRIDES[@]} -gt 0 ]]; then
+        env "${OO_COMMAND_ENV_OVERRIDES[@]}" bash -c "cd \"$project_root\" && dotnet list package --deprecated --include-transitive" >"$dotnet_dep_log" 2>&1
+      else
+        bash -c "cd \"$project_root\" && dotnet list package --deprecated --include-transitive" >"$dotnet_dep_log" 2>&1
+      fi
+      local dotnet_dep_status=$?
+      set -e
+
+      if [[ "$dotnet_vuln_status" -eq 0 || "$dotnet_dep_status" -eq 0 ]]; then
+        local advisory_line
+        while IFS= read -r advisory_line; do
+          [[ "$advisory_line" == ADVISORY\|* ]] || continue
+          local record="${advisory_line#ADVISORY|}"
+          if append_unique_line "$record" "${DEPENDENCY_ADVISORY_RECORDS[@]-}"; then
+            DEPENDENCY_ADVISORY_RECORDS+=("$record")
+          fi
+        done < <(summarize_dotnet_audit_reports "$dotnet_vuln_log" "$dotnet_dep_log")
+      elif [[ "$verbose_mode" == true ]]; then
+        warn "Skipping nuget advisory refresh: dotnet list package commands failed"
+      fi
+
+      rm -f "$dotnet_vuln_log" "$dotnet_dep_log"
+    fi
+  done
+
+  write_dependency_advisory_snapshot "$project_name"
+}
+
 run_project_dependency_commands() {
   local project_root="$1"
   local verbose_mode="${2:-false}"
@@ -2867,6 +3036,7 @@ cmd_doctor() {
   local fix_mode=false
   local assume_yes=false
   local verbose_mode=false
+  local refresh_deps=false
   local inferred_project=false
 
   while [[ $# -gt 0 ]]; do
@@ -2895,12 +3065,17 @@ cmd_doctor() {
       verbose_mode=true
       shift
       ;;
+    --refresh-deps)
+      refresh_deps=true
+      shift
+      ;;
     -h | --help)
       cat <<'EOF'
-Usage: oo doctor [--workflow <workflow> | --global] [--fix] [--yes] [--verbose]
+Usage: oo doctor [--workflow <workflow> | --global] [--fix] [--yes] [--verbose] [--refresh-deps]
 
 Diagnoses runtime and service readiness.
 Use --fix to run safe automatic service installs.
+Use --refresh-deps to refresh dependency advisories before reporting.
 EOF
       return 0
       ;;
@@ -2973,6 +3148,12 @@ EOF
   fi
   echo
 
+  if [[ "$refresh_deps" == true ]]; then
+    echo "Dependency advisories"
+    echo "  ✓ Refresh requested"
+    echo
+  fi
+
   local workflows=()
   local proj=""
   local workflow_repo
@@ -3016,6 +3197,10 @@ EOF
     fi
 
     collect_service_auth_issues "$workflow_repo" "$workflow"
+
+    if [[ "$refresh_deps" == true ]]; then
+      refresh_dependency_advisories_for_project "$workflow_repo" "$workflow" "$verbose_mode"
+    fi
 
     collect_dependency_advisories_for_doctor "$workflow"
     if [[ "$DOCTOR_DEPENDENCY_HAS_ADVISORIES" == true ]]; then
