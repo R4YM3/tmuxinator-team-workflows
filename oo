@@ -16,6 +16,7 @@ OO_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/oo"
 OO_CONFIG_FILE="$OO_CONFIG_DIR/config.yml"
 SERVICES_DIR="$RUNTIME_DIR/services"
 SERVICE_STATE_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/oo/state/services"
+DEP_ADVISORY_STATE_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/oo/state/dependencies"
 SERVICE_CHECK_TIMEOUT_SEC="${OO_SERVICE_CHECK_TIMEOUT_SEC:-4.0}"
 
 START_MISSING_SERVICES=()
@@ -26,7 +27,9 @@ CHECKBOX_SELECTED=()
 PROJECT_DEP_COMMANDS=()
 PROJECT_DEP_LABELS=()
 INSTALL_WARNING_LINES=()
+INSTALL_WARNING_ACTION_LINES=()
 INSTALL_CHANGED_LINES=()
+DEPENDENCY_ADVISORY_RECORDS=()
 OO_COMMAND_ENV_OVERRIDES=()
 SERVICE_AUTH_ISSUES=()
 OO_ENV_FILE_KEYS=()
@@ -987,6 +990,138 @@ VERSION=$version
 CONFIG_HASH=$config_hash
 UPDATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
+}
+
+append_unique_line() {
+  local candidate="$1"
+  shift
+  local existing
+  for existing in "$@"; do
+    if [[ "$existing" == "$candidate" ]]; then
+      return 1
+    fi
+  done
+  return 0
+}
+
+dependency_advisory_file() {
+  local project_name="$1"
+  echo "$DEP_ADVISORY_STATE_ROOT/$project_name.snapshot"
+}
+
+dependency_actions_for_tool() {
+  local tool="$1"
+  case "$tool" in
+  npm)
+    echo "npm audit"
+    echo "npm audit fix"
+    ;;
+  nuget)
+    echo "dotnet list package --vulnerable"
+    echo "dotnet list package --deprecated"
+    ;;
+  *)
+    ;;
+  esac
+  echo "oo install"
+}
+
+advisory_record_to_warning_lines() {
+  local record="$1"
+  IFS='|' read -r tool config_warn deprecated_count vuln_total low moderate high critical <<<"$record"
+
+  if [[ "$config_warn" == "1" ]]; then
+    if [[ "$tool" == "npm" ]]; then
+      echo "npm config contains deprecated or invalid settings"
+    else
+      echo "$tool configuration contains deprecated or invalid settings"
+    fi
+  fi
+
+  if [[ "$deprecated_count" =~ ^[0-9]+$ ]] && [[ "$deprecated_count" -gt 0 ]]; then
+    if [[ "$tool" == "npm" ]]; then
+      echo "Deprecated packages detected ($deprecated_count)"
+    else
+      echo "$tool deprecated packages detected ($deprecated_count)"
+    fi
+  fi
+
+  if [[ "$vuln_total" =~ ^[0-9]+$ ]] && [[ "$vuln_total" -gt 0 ]]; then
+    local details=""
+    [[ "$low" =~ ^[0-9]+$ ]] && [[ "$low" -gt 0 ]] && details+="${low} low, "
+    [[ "$moderate" =~ ^[0-9]+$ ]] && [[ "$moderate" -gt 0 ]] && details+="${moderate} moderate, "
+    [[ "$high" =~ ^[0-9]+$ ]] && [[ "$high" -gt 0 ]] && details+="${high} high, "
+    [[ "$critical" =~ ^[0-9]+$ ]] && [[ "$critical" -gt 0 ]] && details+="${critical} critical, "
+    details="${details%, }"
+
+    if [[ "$tool" == "npm" ]]; then
+      if [[ -n "$details" ]]; then
+        echo "$vuln_total vulnerabilities reported ($details)"
+      else
+        echo "$vuln_total vulnerabilities reported"
+      fi
+    else
+      if [[ -n "$details" ]]; then
+        echo "$tool reported $vuln_total vulnerabilities ($details)"
+      else
+        echo "$tool reported $vuln_total vulnerabilities"
+      fi
+    fi
+  fi
+}
+
+write_dependency_advisory_snapshot() {
+  local project_name="$1"
+  local snapshot_file
+  snapshot_file="$(dependency_advisory_file "$project_name")"
+
+  mkdir -p "$(dirname "$snapshot_file")"
+  {
+    echo "CAPTURED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    local record
+    for record in "${DEPENDENCY_ADVISORY_RECORDS[@]-}"; do
+      [[ -n "$record" ]] || continue
+      echo "ADVISORY=$record"
+    done
+  } >"$snapshot_file"
+}
+
+collect_dependency_advisories_for_doctor() {
+  local project_name="$1"
+  DOCTOR_DEPENDENCY_LINES=()
+  DOCTOR_DEPENDENCY_ACTIONS=()
+  DOCTOR_DEPENDENCY_HAS_ADVISORIES=false
+
+  local snapshot_file
+  snapshot_file="$(dependency_advisory_file "$project_name")"
+  [[ -f "$snapshot_file" ]] || return 0
+
+  local line
+  while IFS= read -r line; do
+    [[ "$line" == ADVISORY=* ]] || continue
+    local record="${line#ADVISORY=}"
+    local warning
+    while IFS= read -r warning; do
+      [[ -n "$warning" ]] || continue
+      if append_unique_line "$warning" "${DOCTOR_DEPENDENCY_LINES[@]-}"; then
+        DOCTOR_DEPENDENCY_LINES+=("$warning")
+      fi
+    done < <(advisory_record_to_warning_lines "$record")
+
+    local tool=""
+    IFS='|' read -r tool _ <<<"$record"
+    local action
+    while IFS= read -r action; do
+      [[ -n "$action" ]] || continue
+      if append_unique_line "$action" "${DOCTOR_DEPENDENCY_ACTIONS[@]-}"; then
+        DOCTOR_DEPENDENCY_ACTIONS+=("$action")
+      fi
+    done < <(dependency_actions_for_tool "$tool")
+  done <"$snapshot_file"
+
+  if [[ ${#DOCTOR_DEPENDENCY_LINES[@]} -gt 0 ]]; then
+    DOCTOR_DEPENDENCY_HAS_ADVISORIES=true
+  fi
 }
 
 ensure_bin_on_path() {
@@ -2214,6 +2349,11 @@ collect_project_dependency_commands() {
     PROJECT_DEP_COMMANDS+=("go mod download")
     PROJECT_DEP_LABELS+=("go mod download")
   fi
+
+  if compgen -G "$project_root/*.sln" >/dev/null || compgen -G "$project_root/*.csproj" >/dev/null || [[ -f "$project_root/packages.config" ]]; then
+    PROJECT_DEP_COMMANDS+=("dotnet restore")
+    PROJECT_DEP_LABELS+=("dotnet restore")
+  fi
 }
 
 summarize_npm_install_warnings() {
@@ -2244,17 +2384,62 @@ for line in lines:
             if mm:
                 severity[mm.group(2).lower()] = int(mm.group(1))
 
-if config_warn:
-    print('WARN|npm config contains deprecated or invalid settings')
-if deprecations > 0:
-    print(f'WARN|Deprecated packages detected ({deprecations})')
-if vuln_total is not None:
-    sev_order = ['low', 'moderate', 'high', 'critical']
-    details = ', '.join(f"{severity[k]} {k}" for k in sev_order if k in severity)
-    if details:
-        print(f'WARN|{vuln_total} vulnerabilities reported ({details})')
-    else:
-        print(f'WARN|{vuln_total} vulnerabilities reported')
+print("ADVISORY|npm|{}|{}|{}|{}|{}|{}|{}".format(
+    1 if config_warn else 0,
+    deprecations,
+    vuln_total if vuln_total is not None else 0,
+    severity.get('low', 0),
+    severity.get('moderate', 0),
+    severity.get('high', 0),
+    severity.get('critical', 0),
+))
+PY
+}
+
+summarize_dotnet_restore_warnings() {
+  local log_file="$1"
+
+  python3 - "$log_file" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+text = open(path, 'r', errors='replace').read()
+lines = text.splitlines()
+
+deprecated = sum(1 for line in lines if re.search(r'\bdeprecated\b', line, re.I))
+
+nu190 = {
+    'low': sum(1 for line in lines if re.search(r'\bNU1901\b', line, re.I)),
+    'moderate': sum(1 for line in lines if re.search(r'\bNU1902\b', line, re.I)),
+    'high': sum(1 for line in lines if re.search(r'\bNU1903\b', line, re.I)),
+    'critical': sum(1 for line in lines if re.search(r'\bNU1904\b', line, re.I)),
+}
+
+severity = dict(nu190)
+vuln_total = sum(severity.values())
+
+if vuln_total == 0:
+    for line in lines:
+        m = re.search(r'(\d+)\s+vulnerabilit(?:y|ies)', line, re.I)
+        if m:
+            vuln_total = int(m.group(1))
+            break
+
+for line in lines:
+    m = re.search(r'(\d+)\s+(low|moderate|high|critical)', line, re.I)
+    if m:
+        level = m.group(2).lower()
+        severity[level] = max(severity.get(level, 0), int(m.group(1)))
+
+print("ADVISORY|nuget|0|{}|{}|{}|{}|{}|{}".format(
+    deprecated,
+    vuln_total,
+    severity.get('low', 0),
+    severity.get('moderate', 0),
+    severity.get('high', 0),
+    severity.get('critical', 0),
+))
 PY
 }
 
@@ -2265,7 +2450,9 @@ run_project_dependency_commands() {
   local total=${#PROJECT_DEP_COMMANDS[@]}
 
   INSTALL_WARNING_LINES=()
+  INSTALL_WARNING_ACTION_LINES=()
   INSTALL_CHANGED_LINES=()
+  DEPENDENCY_ADVISORY_RECORDS=()
 
   if [[ "$total" -eq 0 ]]; then
     info "No dependency installers detected"
@@ -2320,12 +2507,59 @@ PY
       return 1
     fi
 
+    local summary_line=""
     if [[ "$label" == "npm install" ]]; then
       while IFS= read -r summary_line; do
-        [[ "$summary_line" == WARN\|* ]] || continue
-        INSTALL_WARNING_LINES+=("${summary_line#WARN|}")
+        [[ "$summary_line" == ADVISORY\|* ]] || continue
+        local record="${summary_line#ADVISORY|}"
+        local warning
+        if append_unique_line "$record" "${DEPENDENCY_ADVISORY_RECORDS[@]-}"; then
+          DEPENDENCY_ADVISORY_RECORDS+=("$record")
+        fi
+        while IFS= read -r warning; do
+          [[ -n "$warning" ]] || continue
+          if append_unique_line "$warning" "${INSTALL_WARNING_LINES[@]-}"; then
+            INSTALL_WARNING_LINES+=("$warning")
+          fi
+        done < <(advisory_record_to_warning_lines "$record")
+
+        local tool=""
+        local action=""
+        IFS='|' read -r tool _ <<<"$record"
+        while IFS= read -r action; do
+          [[ -n "$action" ]] || continue
+          if append_unique_line "$action" "${INSTALL_WARNING_ACTION_LINES[@]-}"; then
+            INSTALL_WARNING_ACTION_LINES+=("$action")
+          fi
+        done < <(dependency_actions_for_tool "$tool")
       done < <(summarize_npm_install_warnings "$cmd_log")
       INSTALL_CHANGED_LINES+=("Installed npm dependencies")
+    elif [[ "$label" == "dotnet restore" ]]; then
+      while IFS= read -r summary_line; do
+        [[ "$summary_line" == ADVISORY\|* ]] || continue
+        local record="${summary_line#ADVISORY|}"
+        local warning
+        if append_unique_line "$record" "${DEPENDENCY_ADVISORY_RECORDS[@]-}"; then
+          DEPENDENCY_ADVISORY_RECORDS+=("$record")
+        fi
+        while IFS= read -r warning; do
+          [[ -n "$warning" ]] || continue
+          if append_unique_line "$warning" "${INSTALL_WARNING_LINES[@]-}"; then
+            INSTALL_WARNING_LINES+=("$warning")
+          fi
+        done < <(advisory_record_to_warning_lines "$record")
+
+        local tool=""
+        local action=""
+        IFS='|' read -r tool _ <<<"$record"
+        while IFS= read -r action; do
+          [[ -n "$action" ]] || continue
+          if append_unique_line "$action" "${INSTALL_WARNING_ACTION_LINES[@]-}"; then
+            INSTALL_WARNING_ACTION_LINES+=("$action")
+          fi
+        done < <(dependency_actions_for_tool "$tool")
+      done < <(summarize_dotnet_restore_warnings "$cmd_log")
+      INSTALL_CHANGED_LINES+=("Installed dotnet dependencies")
     else
       INSTALL_CHANGED_LINES+=("Installed dependencies via $label")
     fi
@@ -2342,9 +2576,28 @@ PY
     done
     echo
     echo "What you can do"
-    echo "  • Review advisories: npm audit"
-    echo "  • Safe fixes: npm audit fix"
-    echo "  • Environment insights: oo doctor"
+    local action_line
+    if [[ ${#INSTALL_WARNING_ACTION_LINES[@]} -gt 0 ]]; then
+      for action_line in "${INSTALL_WARNING_ACTION_LINES[@]}"; do
+        case "$action_line" in
+        npm\ audit)
+          echo "  • Review advisories: npm audit"
+          ;;
+        npm\ audit\ fix)
+          echo "  • Safe fixes: npm audit fix"
+          ;;
+        oo\ install)
+          echo "  • Refresh advisories: oo install"
+          ;;
+        *)
+          echo "  • $action_line"
+          ;;
+        esac
+      done
+      echo "  • Environment insights: oo doctor"
+    else
+      echo "  • Environment insights: oo doctor"
+    fi
   fi
 
   return 0
@@ -2679,8 +2932,11 @@ EOF
   local issue_count=0
   local env_issue_count=0
   local project_issue_count=0
+  local dependency_advisory_count=0
   local env_ok_items=()
   local env_missing_items=()
+  local doctor_dependency_lines=()
+  local doctor_dependency_actions=()
 
   command -v tmux >/dev/null 2>&1 && tmux_ok=true
   command -v tmuxinator >/dev/null 2>&1 && tmuxinator_ok=true
@@ -2760,6 +3016,27 @@ EOF
     fi
 
     collect_service_auth_issues "$workflow_repo" "$workflow"
+
+    collect_dependency_advisories_for_doctor "$workflow"
+    if [[ "$DOCTOR_DEPENDENCY_HAS_ADVISORIES" == true ]]; then
+      local dep_line
+      for dep_line in "${DOCTOR_DEPENDENCY_LINES[@]}"; do
+        if [[ "$global_mode" == true ]]; then
+          dep_line="$workflow: $dep_line"
+        fi
+        if append_unique_line "$dep_line" "${doctor_dependency_lines[@]-}"; then
+          doctor_dependency_lines+=("$dep_line")
+          dependency_advisory_count=$((dependency_advisory_count + 1))
+        fi
+      done
+
+      local dep_action
+      for dep_action in "${DOCTOR_DEPENDENCY_ACTIONS[@]}"; do
+        if append_unique_line "$dep_action" "${doctor_dependency_actions[@]-}"; then
+          doctor_dependency_actions+=("$dep_action")
+        fi
+      done
+    fi
 
     load_enabled_services_for_project "$workflow_repo" "$workflow"
     if [[ ${#LOADED_PROJECT_SERVICES[@]} -eq 0 ]]; then
@@ -2846,6 +3123,34 @@ EOF
   done
 
   echo
+  if [[ "$dependency_advisory_count" -gt 0 ]]; then
+    echo "Dependencies"
+    local dep_warning
+    for dep_warning in "${doctor_dependency_lines[@]}"; do
+      echo "  ! $dep_warning"
+    done
+    echo
+    echo "What you can do"
+    local dep_action
+    for dep_action in "${doctor_dependency_actions[@]}"; do
+      case "$dep_action" in
+      npm\ audit)
+        echo "  • Details: npm audit"
+        ;;
+      npm\ audit\ fix)
+        echo "  • Safe fixes: npm audit fix"
+        ;;
+      oo\ install)
+        echo "  • Refresh advisories: oo install"
+        ;;
+      *)
+        echo "  • $dep_action"
+        ;;
+      esac
+    done
+    echo
+  fi
+
   local install_cmd="oo install"
   if [[ "$global_mode" == true ]]; then
     install_cmd="oo install --workflow <workflow>"
@@ -3082,6 +3387,7 @@ EOF
       return 1
     fi
     if run_project_dependency_commands "$project_root" "$verbose_mode"; then
+      write_dependency_advisory_snapshot "$project_name"
       if [[ ${#INSTALL_CHANGED_LINES[@]} -gt 0 ]]; then
         local changed_line
         for changed_line in "${INSTALL_CHANGED_LINES[@]}"; do

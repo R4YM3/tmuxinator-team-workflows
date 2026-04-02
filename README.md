@@ -1,282 +1,164 @@
 # Loop (oo)
 
-Stop wasting time setting up dev environments. Start shipping faster.
+Run your workflow. Not your setup.
 
-Loop is a terminal-first CLI that helps teams define, install, and run consistent local development workflows with minimal setup friction.
+Loop (Launch Once, Operate Predictably) is a CLI for starting development environments in seconds-with zero setup friction.
 
-No onboarding guesswork. No setup drift. No "works on my machine" loops.
+No docs.
+No drift.
+No "works on my machine".
 
-## Why teams use Loop
-
-- **Faster onboarding**: teams can get running through a guided setup flow.
-- **Consistent environments**: teams start the same workflow the same way.
-- **Lower daily friction**: startup becomes a short, repeatable command sequence.
-- **Team defaults + personal overrides**: shared standards without losing local flexibility.
-
-## Try it in 30 seconds
+## ⚡ Get running in 30 seconds
 
 ```bash
 oo add
 oo start
 ```
 
-That flow creates a runnable workflow, prepares your environment (if needed), and starts your development session.
+Done.
 
-## What problem Loop solves
+## 🧠 What just happened?
 
-Without Loop, teams often:
+Loop:
 
-- manually document setup steps,
-- rely on tribal knowledge,
-- run slightly different local environments,
-- spend time debugging inconsistent startup behavior.
+- detects your project
+- creates a workflow
+- installs what's missing automatically
+- starts your services
 
-With Loop:
+## 🚀 Why Loop
 
-- setup is explicit,
-- workflows are repeatable,
-- issues are diagnosable.
+- Instant onboarding -> new devs run in minutes
+- Consistent environments -> same workflow, every machine
+- Zero daily friction -> one command to start
+- Safe flexibility -> customize locally without breaking the team
 
-## Core concepts
+## ✨ What makes Loop different
 
-- **workflow**: runnable development workflow
-- **service**: reusable workflow unit (for example: web, api, worker, redis)
-- **command**: executable run instruction
-- **requirements**: what must be installed
-- **environment setup**: preparing machine and workflow prerequisites
-- **runtime**: executing the workflow
+- Auto setup (no checklist needed)
+  - Loop detects what your project needs and installs it for you.
+- Smart dependency detection
+  - Works out of the box with npm, pip, bundler, go, and more.
+- Built-in diagnostics (`oo doctor`)
+  - See exactly what's wrong and how to fix it-instantly.
+- Runs even when imperfect
+  - Start working while Loop surfaces issues in the background.
+- Strict mode when it matters
+  - Enforce a fully ready environment when consistency is critical.
+- Team workflow + personal overrides ⭐
+  - A shared workflow defines how the project runs.
+  - You can safely override it locally-without changing the team setup.
+- Workspace-aware
+  - Handles multi-repo setups automatically.
 
-## Installation
+## 🧩 The problem
 
-Install globally:
+Most teams don't struggle with code.
+They struggle with everything around it:
+
+- setup instructions go stale
+- environments drift
+- debugging startup becomes guesswork
+
+## ✅ The fix
+
+Loop makes your workflow:
+
+- explicit
+- repeatable
+- diagnosable
+
+## ⚙️ Install
 
 ```bash
 curl -fsSL "https://raw.githubusercontent.com/R4YM3/loop/main/scripts/bootstrap.sh" | bash && exec "$SHELL" -l
-```
-
-Bootstrap script source:
-
-`https://github.com/R4YM3/loop/blob/main/scripts/bootstrap.sh`
-
-Verify:
-
-```bash
 oo version
-oo help
 ```
 
-Uninstall:
+## 🔄 Your new daily flow
 
 ```bash
-oo uninstall
-```
-
-## Quickstart
-
-```bash
-oo add
-oo install
 oo start
 ```
 
-Notes:
+That's it.
 
-- `oo add` can run setup immediately in interactive mode.
-- `oo install` ensures your environment and dependencies are ready.
-- `oo start` launches your workflow.
-
-## Typical workflow
-
-1. **Create or link a workflow**
-
-   ```bash
-   oo add
-   ```
-
-   - detects workflow or workspace context,
-   - creates workflow config,
-   - links `.oo/` files.
-
-2. **Install requirements**
-
-   ```bash
-   oo install
-   ```
-
-   - installs missing system requirements,
-   - installs workflow dependencies.
-
-3. **Start your workflow**
-
-   ```bash
-   oo start
-   ```
-
-   - runs services and commands,
-   - warns if setup is incomplete.
-
-4. **Diagnose issues**
-
-   ```bash
-   oo doctor
-   ```
-
-   - checks environment and workflow readiness,
-   - highlights blocking issues and next actions.
-
-## Command overview
-
-### Workflow
-
-- `oo add [--dry-run] [--no-install]`
-- `oo remove`
-
-### Environment setup
-
-- `oo install [--yes] [--plan] [--no-workflow-deps] [--verbose]`
-
-### Services
-
-- `oo service add`
-- `oo service remove`
-- `oo service list`
-- `oo service install`
-
-### Runtime and health
-
-- `oo start`
-- `oo stop`
-- `oo status`
-- `oo doctor [--verbose]`
-
-### Other
-
-- `oo demo`
-- `oo validate`
-- `oo list`
-- `oo update`
-- `oo uninstall`
-- `oo version`
-
-## CLI output style
-
-Loop uses concise, scan-friendly output:
-
-- `◆` section heading
-- `...` in progress
-- `✓` success
-- `!` warning
-- `✖` blocking error
-
-Example error:
-
-```text
-✖ Start blocked (RUN-022)
-
-Reason
-  Strict mode requires a fully prepared environment, but setup is incomplete.
-
-What you can do
-  • Run: oo install
-  • Check status: oo doctor
-  • Retry (strict): oo start --strict
-```
-
-## Error code groups
-
-- `RUN-*` runtime/start issues
-- `INS-*` install issues
-- `ENV-*` environment state issues
-- `CFG-*` configuration issues
-- `SYS-*` internal/system issues
-
-## Team + override config
-
-Loop separates shared and personal configuration:
-
-```text
-.oo/workflow.yaml     # team defaults
-.oo/override.yaml   # personal overrides
-```
-
-This gives teams consistency while preserving safe local customization.
-
-## Workspace support
-
-If you run `oo add` in a directory with multiple repositories, Loop can automatically create a workspace workflow.
-
-## Workflow structure
-
-Workflows live in a central root and are linked into local repositories:
-
-```text
-<team-workflows-root>/
-├── workflow-a/
-│   ├── workflow.yaml
-│   └── override.yaml
-```
-
-## Dependency detection
-
-Loop detects workflow dependency systems automatically:
-
-- `package.json` -> `npm install`
-- `requirements.txt` -> `pip3 install -r requirements.txt`
-- `Gemfile` -> `bundle install`
-- `go.mod` -> `go mod download`
-
-## Common flows
-
-### First-time setup
+## 🛠 Basic commands
 
 ```bash
-oo add
-oo start
+oo add        # create workflow
+oo install    # install requirements
+oo start      # run everything
+oo stop       # stop everything
+oo doctor     # diagnose your environment in seconds
 ```
 
-### Controlled setup
+## 🩺 Diagnose your setup instantly
 
 ```bash
-oo add --dry-run
-oo add
-oo install --workflow <name>
 oo doctor
-oo start <name>
 ```
 
-### Non-interactive setup
+See exactly what's wrong:
+
+- missing dependencies
+- incomplete setup
+- misconfigured services
+
+With clear next steps to fix it.
+
+## 🧱 How it works
+
+A workflow is a runnable dev environment:
+
+- services -> web, api, worker, redis
+- commands -> what runs
+- requirements -> what's needed
+
+## 🧪 Config
+
+```text
+.oo/workflow.yaml   # shared team workflow
+.oo/override.yaml   # your local adjustments
+```
+
+- `workflow.yaml` defines how the project runs
+- `override.yaml` lets you tweak it locally
+
+No conflicts. No breaking the team setup.
+
+## 🧭 Workspace support
+
+Multiple repositories?
 
 ```bash
 oo add
-oo install --yes
-oo start
 ```
 
-### Adding a service
+Loop creates a workspace automatically.
 
-```bash
-oo service add redis
-oo install
-oo start
+## 📣 Output you can actually read
+
+```text
+◆ Starting services
+✓ ready
+! warning
+✖ blocking error
 ```
 
-## What Loop is (and is not)
+## 🎯 What Loop is
 
-Loop is:
+- local workflow engine
+- team consistency layer
+- CLI-first dev tool
 
-- a local development workflow orchestrator,
-- a consistency layer for teams,
-- a CLI-first workflow tool.
+## 🚫 What it's not
 
-Loop is not:
+- not a deployment tool
+- not production orchestration
+- not a package manager
 
-- a deployment tool,
-- a production orchestrator,
-- a replacement for package managers.
-
-## Testing
-
-Run locally:
+## 🧪 Testing
 
 ```bash
 tests/scripts/test-flow
@@ -284,12 +166,14 @@ tests/scripts/test-services
 tests/scripts/test-docker
 ```
 
-## License
+## 🪪 License
 
 MIT
 
-## Final note
+## 💬 Final thought
 
-Loop is about reducing friction without removing flexibility.
+Every project has a workflow.
 
-Define workflows once. Run them the same way every day.
+Most teams just don't control it.
+
+Loop does.
