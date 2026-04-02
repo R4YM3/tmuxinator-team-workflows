@@ -99,13 +99,26 @@ spinner_should_render() {
 
 spinner_start() {
   local label="$1"
+  local show_percent="${2:-false}"
   local frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
   (
     local i=0
+    local percent=0
+    local tick=0
     while :; do
-      printf "\r  %s %s" "${frames[$((i % ${#frames[@]}))]}" "$label"
+      if [[ "$show_percent" == true ]]; then
+        if [[ "$percent" -lt 80 ]]; then
+          percent=$((percent + 1))
+        elif [[ "$percent" -lt 95 ]] && [[ $((tick % 4)) -eq 0 ]]; then
+          percent=$((percent + 1))
+        fi
+        printf "\r  %s %s (%d%%)" "${frames[$((i % ${#frames[@]}))]}" "$label" "$percent"
+      else
+        printf "\r  %s %s" "${frames[$((i % ${#frames[@]}))]}" "$label"
+      fi
       sleep 0.1
       i=$((i + 1))
+      tick=$((tick + 1))
     done
   ) &
   SPINNER_PID=$!
@@ -132,7 +145,8 @@ run_logged_step() {
   local label="$1"
   local verbose_mode="$2"
   local log_file="$3"
-  shift 3
+  local show_percent="${4:-false}"
+  shift 4
 
   if [[ "$verbose_mode" == true ]]; then
     echo "  ... $label"
@@ -145,7 +159,7 @@ run_logged_step() {
   fi
 
   if spinner_should_render "$verbose_mode"; then
-    spinner_start "$label"
+    spinner_start "$label" "$show_percent"
     set +e
     "$@" >"$log_file" 2>&1
     local rc=$?
@@ -2115,7 +2129,7 @@ install_selected_services_for_project() {
     local cmd_log
     cmd_log="$(mktemp "${TMPDIR:-/tmp}/oo-service-${idx}-XXXXXX")"
     local cmd_status=0
-    if run_logged_step "Installing $service_label" "$verbose_mode" "$cmd_log" env "OO_SERVICE_CONFIG_JSON=$SERVICE_CTX_CONFIG_JSON" "OO_SERVICE_ASSUME_YES=$assume_yes" bash "$SERVICE_CTX_SCRIPT" install; then
+    if run_logged_step "Installing $service_label" "$verbose_mode" "$cmd_log" false env "OO_SERVICE_CONFIG_JSON=$SERVICE_CTX_CONFIG_JSON" "OO_SERVICE_ASSUME_YES=$assume_yes" bash "$SERVICE_CTX_SCRIPT" install; then
       cmd_status=0
     else
       cmd_status=$?
@@ -2270,13 +2284,13 @@ run_project_dependency_commands() {
     local cmd_status=0
     local run_status=0
     if [[ ${#OO_COMMAND_ENV_OVERRIDES[@]} -gt 0 ]]; then
-      if run_logged_step "$step_label" "$verbose_mode" "$cmd_log" env "${OO_COMMAND_ENV_OVERRIDES[@]}" bash -c "cd \"$project_root\" && $command"; then
+      if run_logged_step "$step_label" "$verbose_mode" "$cmd_log" true env "${OO_COMMAND_ENV_OVERRIDES[@]}" bash -c "cd \"$project_root\" && $command"; then
         run_status=0
       else
         run_status=$?
       fi
     else
-      if run_logged_step "$step_label" "$verbose_mode" "$cmd_log" bash -c "cd \"$project_root\" && $command"; then
+      if run_logged_step "$step_label" "$verbose_mode" "$cmd_log" true bash -c "cd \"$project_root\" && $command"; then
         run_status=0
       else
         run_status=$?
@@ -3147,7 +3161,7 @@ EOF
   echo "Updating runtime"
   local update_log
   update_log="$(mktemp "${TMPDIR:-/tmp}/oo-update-XXXXXX")"
-  if ! run_logged_step "Checking for updates" "$verbose" "$update_log" git -C "$RUNTIME_DIR" pull --ff-only; then
+  if ! run_logged_step "Checking for updates" "$verbose" "$update_log" false git -C "$RUNTIME_DIR" pull --ff-only; then
     rm -f "$update_log"
     error "SYS-001 Failed to update runtime repository"
     info "Run: oo update --verbose"
@@ -3703,7 +3717,7 @@ cmd_start() {
   if [[ "$no_attach" == true ]]; then
     local start_log
     start_log="$(mktemp "${TMPDIR:-/tmp}/oo-start-XXXXXX")"
-    if run_logged_step "Starting workflow" "false" "$start_log" bash -c "cd \"$workflow_repo\" && tmuxinator start -p \"$rendered_config_file\" ${start_args[*]}"; then
+    if run_logged_step "Starting workflow" "false" "$start_log" false bash -c "cd \"$workflow_repo\" && tmuxinator start -p \"$rendered_config_file\" ${start_args[*]}"; then
       tmuxinator_status=0
     else
       tmuxinator_status=$?
