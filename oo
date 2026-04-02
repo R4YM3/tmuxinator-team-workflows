@@ -2091,7 +2091,8 @@ install_selected_services_for_project() {
   local repo="$1"
   local project_name="$2"
   local assume_yes="$3"
-  shift 3
+  local verbose_mode="${4:-false}"
+  shift 4
 
   local selected_services=("$@")
   local service=""
@@ -2111,12 +2112,23 @@ install_selected_services_for_project() {
     local service_label
     service_label="$(service_requirement_label "$service")"
 
-    echo "  ... $service_label"
-    if ! OO_SERVICE_CONFIG_JSON="$SERVICE_CTX_CONFIG_JSON" OO_SERVICE_ASSUME_YES="$assume_yes" bash "$SERVICE_CTX_SCRIPT" install; then
+    local cmd_log
+    cmd_log="$(mktemp "${TMPDIR:-/tmp}/oo-service-${idx}-XXXXXX")"
+    local cmd_status=0
+    if run_logged_step "Installing $service_label" "$verbose_mode" "$cmd_log" env "OO_SERVICE_CONFIG_JSON=$SERVICE_CTX_CONFIG_JSON" "OO_SERVICE_ASSUME_YES=$assume_yes" bash "$SERVICE_CTX_SCRIPT" install; then
+      cmd_status=0
+    else
+      cmd_status=$?
+    fi
+
+    if [[ "$cmd_status" -ne 0 ]]; then
+      rm -f "$cmd_log"
       error_block "INS-001" "Install failed" "$service_label install failed" "Run again with --verbose" "Run: oo doctor"
       failures+=("$service")
       continue
     fi
+
+    rm -f "$cmd_log"
 
     if ! OO_SERVICE_CONFIG_JSON="$SERVICE_CTX_CONFIG_JSON" bash "$SERVICE_CTX_SCRIPT" check >/dev/null 2>&1; then
       error_block "INS-002" "Install failed" "$service_label check failed after install" "Run again with --verbose" "Run: oo doctor"
@@ -2125,7 +2137,7 @@ install_selected_services_for_project() {
     fi
 
     write_service_state "$project_name" "$service" "$SERVICE_CTX_VERSION" "$SERVICE_CTX_CONFIG_HASH"
-    ok "Requirement ready: $service"
+    echo "  ✓ Requirement ready: $service"
   done
 
   if [[ ${#failures[@]} -gt 0 ]]; then
@@ -3011,7 +3023,7 @@ EOF
 
     selected_services=("${INSTALL_CANDIDATES[@]-}")
 
-    if install_selected_services_for_project "$workflow_repo" "$project_name" "$assume_yes" "${selected_services[@]}"; then
+    if install_selected_services_for_project "$workflow_repo" "$project_name" "$assume_yes" "$verbose_mode" "${selected_services[@]}"; then
       changed_items+=("Installed environment requirements")
     fi
   fi
@@ -3132,20 +3144,16 @@ EOF
   echo "◆ Updating oo"
   echo "  Location: $display_dir"
   echo
-  echo "Checking for updates"
-
-  if [[ "$verbose" == true ]]; then
-    if ! git -C "$RUNTIME_DIR" pull --ff-only; then
-      error "SYS-001 Failed to update runtime repository"
-      return 1
-    fi
-  else
-    if ! git -C "$RUNTIME_DIR" pull --ff-only >/dev/null 2>&1; then
-      error "SYS-001 Failed to update runtime repository"
-      info "Run: oo update --verbose"
-      return 1
-    fi
+  echo "Updating runtime"
+  local update_log
+  update_log="$(mktemp "${TMPDIR:-/tmp}/oo-update-XXXXXX")"
+  if ! run_logged_step "Checking for updates" "$verbose" "$update_log" git -C "$RUNTIME_DIR" pull --ff-only; then
+    rm -f "$update_log"
+    error "SYS-001 Failed to update runtime repository"
+    info "Run: oo update --verbose"
+    return 1
   fi
+  rm -f "$update_log"
 
   local after_rev
   after_rev="$(git -C "$RUNTIME_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
@@ -3687,18 +3695,34 @@ cmd_start() {
   fi
 
   sanitize_tmux_env
-  echo "[oo] Starting workflow..."
-  set +e
-  (
-    cd "$workflow_repo"
-    if [[ ${#start_args[@]} -gt 0 ]]; then
-      tmuxinator start -p "$rendered_config_file" "${start_args[@]}"
+  local no_attach=false
+  if [[ ${#start_args[@]} -gt 0 ]] && start_requested_no_attach "${start_args[@]}"; then
+    no_attach=true
+  fi
+
+  if [[ "$no_attach" == true ]]; then
+    local start_log
+    start_log="$(mktemp "${TMPDIR:-/tmp}/oo-start-XXXXXX")"
+    if run_logged_step "Starting workflow" "false" "$start_log" bash -c "cd \"$workflow_repo\" && tmuxinator start -p \"$rendered_config_file\" ${start_args[*]}"; then
+      tmuxinator_status=0
     else
-      tmuxinator start -p "$rendered_config_file"
+      tmuxinator_status=$?
     fi
-  )
-  tmuxinator_status=$?
-  set -e
+    rm -f "$start_log"
+  else
+    echo "[oo] Starting workflow..."
+    set +e
+    (
+      cd "$workflow_repo"
+      if [[ ${#start_args[@]} -gt 0 ]]; then
+        tmuxinator start -p "$rendered_config_file" "${start_args[@]}"
+      else
+        tmuxinator start -p "$rendered_config_file"
+      fi
+    )
+    tmuxinator_status=$?
+    set -e
+  fi
   rm -f "$rendered_config_file"
   if [[ "$tmuxinator_status" -ne 0 ]] && [[ "$had_session_before" == false ]] && tmux has-session -t "$project_name" 2>/dev/null; then
     if [[ ${#start_args[@]} -gt 0 ]] && start_requested_no_attach "${start_args[@]}"; then
